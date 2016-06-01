@@ -21,7 +21,7 @@
 *.dylib
 
 # Visual studio local files
-*.sdf
+*sdf
 *.suo
 *.user
 ipch
