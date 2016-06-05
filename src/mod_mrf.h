@@ -34,8 +34,25 @@
 APLOG_USE_MODULE(mrf);
 #endif
 
+struct sz {
+    apr_int64_t x, y, z, c;
+};
+
 typedef struct {
-    char *the_mrf;     // The mrf file name
+    // The mrf data file name
+    char *datafname;     
+    // The mrf index file name
+    char *idxfname;
+    // Forced mime-type, default is autodetected
+    char *mime_type;
+    // Full raster size in pixels
+    struct sz size;
+    // Page size in pixels
+    struct sz pagesize;
+    // Empty tile, if provided
+    apr_uint32_t *empty;
+    apr_int64_t esize;
+    apr_off_t eoffset;
 } mrf_conf;
 
 extern module AP_MODULE_DECLARE_DATA mrf_module;

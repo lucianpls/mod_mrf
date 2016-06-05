@@ -1,2 +1,2 @@
 # mod_mrf
-An apache tile handler from a MRF
+An apache module that serves tiles directly from a MRF
