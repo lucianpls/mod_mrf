@@ -53,6 +53,10 @@ typedef struct {
     apr_uint32_t *empty;
     apr_int64_t esize;
     apr_off_t eoffset;
+
+    // ETag support
+    apr_uint64_t seed;
+
 } mrf_conf;
 
 extern module AP_MODULE_DECLARE_DATA mrf_module;

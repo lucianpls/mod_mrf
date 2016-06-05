@@ -16,6 +16,9 @@
   <ItemGroup>
     <ClInclude Include="src\mod_mrf.h" />
   </ItemGroup>
+  <ItemGroup>
+    <None Include="README.md" />
+  </ItemGroup>
   <PropertyGroup Label="Globals">
     <ProjectGuid>{C7E01836-333F-490D-A3B5-3554A8935040}</ProjectGuid>
     <Keyword>Win32Proj</Keyword>

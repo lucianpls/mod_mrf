@@ -99,6 +99,11 @@ static char *get_xyzc_size(apr_pool_t *p, struct sz *size, const char *value, co
 //  First number is assumed to be the size, second is offset
 //  If filename is not provided, it uses the data file name
 // 
+//  ETagSeed base32_string
+//  Optional.  Uses the first 64 bits only.  Zero is valid.
+//  The empty tile ETag will be this value but the 65th bit is set. All the other tiles
+//  have ETags that depend on this one, and are 64bit only
+//
 
 static const char *mrf_file_set(cmd_parms *cmd, void *dconf, const char *arg)
 {
@@ -195,6 +200,12 @@ static const char *mrf_file_set(cmd_parms *cmd, void *dconf, const char *arg)
             return apr_psprintf(cmd->pool, "Can't read from %s, loaded from %s: %s",
                 efname, arg, strerror(errno));
         apr_file_close(efile);
+    }
+
+    line = apr_table_get(kvp, "ETagSeed");
+    if (line) {
+        if (*line == '"') line++; // Just in case we have it quoted
+        c->seed = apr_strtoi64(line,0,32);
     }
 
     return NULL;

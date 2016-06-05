@@ -9,6 +9,9 @@
       <UniqueIdentifier>{93995380-89BD-4b04-88EB-625FBE52EBFB}</UniqueIdentifier>
       <Extensions>h;hh;hpp;hxx;hm;inl;inc;xsd</Extensions>
     </Filter>
+    <Filter Include="DOC">
+      <UniqueIdentifier>{a73e6c46-3010-4cc7-b8fa-4d7c875ede0f}</UniqueIdentifier>
+    </Filter>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="src\mod_mrf.cpp">
@@ -19,5 +22,10 @@
     <ClInclude Include="src\mod_mrf.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="README.md">
+      <Filter>DOC</Filter>
+    </None>
   </ItemGroup>
 </Project>
