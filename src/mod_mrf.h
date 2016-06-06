@@ -6,20 +6,14 @@
 
 #if !defined(MOD_MRF_H)
 #include <httpd.h>
-#include <http_protocol.h>
 #include <http_config.h>
-#include <http_core.h>
 #include <http_main.h>
+#include <http_protocol.h>
+#include <http_core.h>
 #include <http_request.h>
 #include <http_log.h>
 
-#include <apr.h>
-#include <apr_lib.h>
-#include <apr_pools.h>
 #include <apr_strings.h>
-#include <apr_tables.h>
-#include <apr_uri.h>
-#include <apr_portable.h>
 
 #define APR_WANT_STRFUNC
 #define APR_WANT_MEMFUNC
@@ -38,6 +32,19 @@ struct sz {
     apr_int64_t x, y, z, c;
 };
 
+struct rset {
+    apr_off_t offset;
+    // in tiles
+    int width;
+    // in tiles
+    int height;
+};
+
+typedef struct {
+    apr_uint64_t offset;
+    apr_uint64_t size;
+} TIdx;
+
 typedef struct {
     // The mrf data file name
     char *datafname;     
@@ -49,12 +56,21 @@ typedef struct {
     struct sz size;
     // Page size in pixels
     struct sz pagesize;
+
+    // Levels to skip at the top
+    int skip_levels;
+    int n_levels;
+    struct rset *rsets;
+
     // Empty tile, if provided
     apr_uint32_t *empty;
     apr_int64_t esize;
     apr_off_t eoffset;
 
-    // ETag support
+    // Turns the module functionality off
+    int enabled;
+
+    // ETag initializer
     apr_uint64_t seed;
 
 } mrf_conf;
