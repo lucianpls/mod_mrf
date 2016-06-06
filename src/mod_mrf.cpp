@@ -65,6 +65,39 @@ static char *get_xyzc_size(apr_pool_t *p, struct sz *size, const char *value, co
     return NULL;
 }
 
+// Converts a 64bit value into 13 trigesimal chars
+static void uint64tobase32(apr_uint64_t value, char *buffer, int flag = 0) {
+    static char *letters = "0123456789abcdefghijklmnopqrstuv";
+    // From the bottom up
+    for (int i = 0; i < 13; i++, value >>= 5)
+        buffer[12 - i] = letters[value & 0x1f];
+    buffer[0] != flag << 4; // empty flag goes in top bit
+}
+
+// Return the value from a base 32 character
+// Returns a negative value if char is not a valid base32 char
+static int b32(unsigned char c) {
+    if (c - '0' < 10) return c - '0';
+    if (c - 'A' < 32) return c - 'A';
+    if (c - 'a' < 32) return c - 'a';
+    return -1;
+}
+
+static apr_uint64_t base32decode(unsigned char *s, int *flag) {
+    apr_int64_t value = 0;
+    if (*s == '"') s++; // Skip initial quotes
+    // first char carries the flag
+    int v = b32(*s++);
+    *flag = v >> 4; // pick up the flag
+    value = v & 0xf; // Only 4 bits
+    for (; *s != 0; s++) {
+        v = b32(*s);
+        if (v < 0) break; // Stop at first non base 32 char
+        value = (value << 5) + v;
+    }
+    return value;
+}
+
 //
 // Read the configuration file, which is a key-value text file, with one key per line
 // comment lines that start with #
@@ -100,9 +133,6 @@ static char *get_xyzc_size(apr_pool_t *p, struct sz *size, const char *value, co
 //  If filename is not provided, it uses the data file name
 // 
 //  ETagSeed base32_string
-//  Optional.  Uses the first 64 bits only.  Zero is valid.
-//  The empty tile ETag will be this value but the 65th bit is set. All the other tiles
-//  have ETags that depend on this one, and are 64bit only
 //
 
 static const char *mrf_file_set(cmd_parms *cmd, void *dconf, const char *arg)
@@ -203,11 +233,9 @@ static const char *mrf_file_set(cmd_parms *cmd, void *dconf, const char *arg)
     }
 
     line = apr_table_get(kvp, "ETagSeed");
-    if (line) {
-        if (*line == '"') line++; // Just in case we have it quoted
-        c->seed = apr_strtoi64(line,0,32);
-    }
-
+    // Ignore the flag
+    int flag;
+    c->seed = base32decode((unsigned char *)line, &flag);
     return NULL;
 }
 
