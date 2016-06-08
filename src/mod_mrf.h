@@ -17,7 +17,6 @@
 
 #define APR_WANT_STRFUNC
 #define APR_WANT_MEMFUNC
-#define APR_WANT_BYTEFUNC
 #include <apr_want.h>
 
 #if defined(WIN32)
