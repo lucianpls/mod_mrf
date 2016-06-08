@@ -32,6 +32,27 @@
 // This one is not a type, just an encoding
 #define GZIP_SIG 0x436e745a
 
+// Conversion to and from network order, endianess depenent
+
+#if (APR_IS_BIGENDIAN == 0) // Little endian
+#if defined(WIN32) // Windows
+#define ntoh32(v) _byteswap_ulong(v)
+#define hton32(v) _byteswap_ulong(v)
+#define ntoh64(v) _byteswap_uint64(v)
+#define hton64(v) _byteswap_uint64(v)
+#else // Assume linux
+#define ntoh32(v) __builtin_bswap32(v)
+#define hton32(v) __builtin_bswap32(v)
+#define ntoh64(v) __builtin_bswap64(v)
+#define hton64(v) __builtin_bswap64(v)
+#endif
+#else // Big endian, do nothing
+#define ntoh32(v)  (v)
+#define ntoh64(v)  (v)
+#define hton32(v)  (v)
+#define hton64(v)  (v)
+#endif
+
 #if defined(APLOG_USE_MODULE)
 APLOG_USE_MODULE(mrf);
 #endif

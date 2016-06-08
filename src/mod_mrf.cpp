@@ -304,7 +304,7 @@ static int send_image(request_rec *r, apr_uint32_t *buffer, apr_size_t size) {
     if (cfg->mime_type)
         ap_set_content_type(r, cfg->mime_type);
     else
-        switch (htonl(*buffer)) {
+        switch (hton32(*buffer)) {
         case JPEG_SIG:
             ap_set_content_type(r, "image/jpeg");
             break;
@@ -315,7 +315,7 @@ static int send_image(request_rec *r, apr_uint32_t *buffer, apr_size_t size) {
             ap_set_content_type(r, "application/octet-stream");
     }
     // Is it gzipped content?
-    if (GZIP_SIG == htonl(*buffer))
+    if (GZIP_SIG == hton32(*buffer))
         apr_table_setn(r->headers_out, "Content-Encoding", "gzip");
 
     // TODO: Set headers, as chosen by user
@@ -340,13 +340,6 @@ apr_status_t open_file(request_rec *r, apr_file_t **pfh, const char *name)
 
 #define REQ_ERR_IF(X) if (X) return HTTP_BAD_REQUEST
 #define SERR_IF(X) if (X) return HTTP_INTERNAL_SERVER_ERROR
-
-//  byteswap a 64bit ull from network order
-#if (APR_IS_BIGENDIAN == 0)
-#define NTOHLL(v) ntohl(apr_uint32_t((v) >> 32)) + (apr_uint64_t(ntohl(apr_uint32_t((v) & 0xffff))) << 32)
-#else
-#define NTOHLL(v) (v)
-#endif
 
 static int handler(request_rec *r)
 {
@@ -394,8 +387,8 @@ static int handler(request_rec *r)
     SERR_IF(read_size != sizeof(index));
 
     // MRF index record is in network order
-    index.size = NTOHLL(index.size);
-    index.size = NTOHLL(index.offset);
+    index.size = ntoh64(index.size);
+    index.size = ntoh64(index.offset);
 
     if (index.size < 4) // Need at least four bytes for signature check
         send_empty_tile(r);
