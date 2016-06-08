@@ -288,7 +288,7 @@ static const char *mrf_file_set(cmd_parms *cmd, void *dconf, const char *arg)
         c->empty = (apr_uint32_t *) apr_palloc(cmd->pool, c->esize);
         stat = apr_file_seek(efile, APR_SET, &offset);
         if (APR_SUCCESS != stat)
-            return apr_psprintf(cmd->pool, "Can't seek empty tile %s: %pm", efile, stat);
+            return apr_psprintf(cmd->pool, "Can't seek empty tile %s: %pm", efname, stat);
         apr_size_t size = (apr_size_t)c->esize;
         stat = apr_file_read(efile, c->empty, &size);
         if (APR_SUCCESS != stat)
@@ -364,6 +364,7 @@ static int handler(request_rec *r)
     // Use a xyzc structure, with c being the level
     // Input order is M/Level/Row/Column, with M being optional
     sz tile;
+    memset(&tile, 0, sizeof(tile));
 
     // Need at least three numerical arguments
     tile.x = apr_atoi64((char *)apr_array_pop(tokens)); REQ_ERR_IF(errno);
