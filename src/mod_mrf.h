@@ -24,6 +24,14 @@
 #define CMD_FUNC (cmd_func)
 #endif
 
+// signatures in big endian, to autodetect tile type
+#define PNG_SIG 0x89504e47
+#define JPEG_SIG 0xffd8ffe0
+#define LERC_SIG 0x436e745a
+
+// This one is not a type, just an encoding
+#define GZIP_SIG 0x436e745a
+
 #if defined(APLOG_USE_MODULE)
 APLOG_USE_MODULE(mrf);
 #endif
