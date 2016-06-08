@@ -13,6 +13,8 @@
 *.a
 *.la
 *.lo
+*.slo
+.libs
 
 # Shared objects (inc. Windows DLLs)
 *.dll
@@ -20,13 +22,14 @@
 *.so.*
 *.dylib
 
-# Visual studio local files
+# local files
 *sdf
 *.suo
 *.user
 ipch
 Debug
 Release
+*.lcl
 
 # Executables
 *.exe

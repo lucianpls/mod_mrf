@@ -92,7 +92,7 @@ static void uint64tobase32(apr_uint64_t value, char *buffer, int flag = 0) {
     // From the bottom up
     for (int i = 0; i < 13; i++, value >>= 5)
         buffer[12 - i] = letters[value & 0x1f];
-    buffer[0] != flag << 4; // empty flag goes in top bit
+    buffer[0] |= flag << 4; // empty flag goes in top bit
 }
 
 // Return the value from a base 32 character
@@ -141,49 +141,49 @@ static void mrf_init(apr_pool_t *p, mrf_conf *c) {
     ap_assert(c->rsets->height == 1 && c->rsets->width == 1);
 }
 
-//
-// Read the configuration file, which is a key-value text file, with one key per line
-// comment lines that start with #
-// empty lines are allowed, as well as continued lines if the first one ends with \
-// However, every line is limited to the Apache max string size, defaults to 8192 chars
-//
-// Unknown keys, or keys that are misspelled are silently ignored
-// Keys are not case sensitive, but values are
-// Keys and values are space separated.  The last value per line, if it is a string, may contain spaces
-//
-// Supported keys:
-//
-//  Size X Y <Z> <C>
-//  Mandatory, the size in pixels of the input MRF.  Z defaults to 1 and C defaults to 3 (usually not meaningful)
-//
-//  PageSize X Y <1> <C>
-//  Optional, the pagesize in pixels.  Z has to be 1 if C is provided, which has to match the C value from size
-//
-//  DataFile string
-//  Mandatory, the data file of the MRF.
-//  
-//  IndexFile string
-//  Optional, The index file name.
-//  If not provided it uses the data file name if its extension is not three letters.  
-//  Otherwise it uses the datafile name with the extension changed to .idx
-// 
-//  MimeType string
-//  Optional.  Defaults to autodetect
-//
-//  EmptyTile <Size> <Offset> <FileName>
-//  Optional.  By default it ignores the request if a tile is missing
-//  First number is assumed to be the size, second is offset
-//  If filename is not provided, it uses the data file name
-//
-//  SkippedLevels <N>
-//  Optional, how many levels to ignore, at the top of the MRF pyramid
-//  For example a GCS pyramid will have to skip the one tile level, so this should be 1
-// 
-//  ETagSeed base32_string
-//  Optional, 64 bits in base32 digits.  Defaults to 0
-//  The empty tile ETag will be this value but bit 64 (65th bit) is set. All the other tiles
-//  have ETags that depend on this one and bit 64 is zero
-//
+/*
+ Read the configuration file, which is a key-value text file, with one key per line
+ comment lines that start with #
+ empty lines are allowed, as well as continued lines if the first one ends with \
+ However, every line is limited to the Apache max string size, defaults to 8192 chars
+
+ Unknown keys, or keys that are misspelled are silently ignored
+ Keys are not case sensitive, but values are
+ Keys and values are space separated.  The last value per line, if it is a string, may contain spaces
+
+ Supported keys:
+
+  Size X Y <Z> <C>
+  Mandatory, the size in pixels of the input MRF.  Z defaults to 1 and C defaults to 3 (usually not meaningful)
+
+  PageSize X Y <1> <C>
+  Optional, the pagesize in pixels.  Z has to be 1 if C is provided, which has to match the C value from size
+
+  DataFile string
+  Mandatory, the data file of the MRF.
+  
+  IndexFile string
+  Optional, The index file name.
+  If not provided it uses the data file name if its extension is not three letters.  
+  Otherwise it uses the datafile name with the extension changed to .idx
+ 
+  MimeType string
+  Optional.  Defaults to autodetect
+
+  EmptyTile <Size> <Offset> <FileName>
+  Optional.  By default it ignores the request if a tile is missing
+  First number is assumed to be the size, second is offset
+  If filename is not provided, it uses the data file name
+
+  SkippedLevels <N>
+  Optional, how many levels to ignore, at the top of the MRF pyramid
+  For example a GCS pyramid will have to skip the one tile level, so this should be 1
+ 
+  ETagSeed base32_string
+  Optional, 64 bits in base32 digits.  Defaults to 0
+  The empty tile ETag will be this value but bit 64 (65th bit) is set. All the other tiles
+  have ETags that depend on this one and bit 64 is zero
+*/
 
 static const char *mrf_file_set(cmd_parms *cmd, void *dconf, const char *arg)
 {
@@ -199,7 +199,7 @@ static const char *mrf_file_set(cmd_parms *cmd, void *dconf, const char *arg)
 
     line = apr_table_get(kvp, "Size");
     if (!line)
-        return apr_psprintf(cmd->temp_pool, "%s Size directive is mandatory");
+        return apr_psprintf(cmd->temp_pool, "%s Size directive is mandatory", arg);
     err_prefix = apr_psprintf(cmd->temp_pool, "%s Size", arg);
     err_message = get_xyzc_size(cmd->temp_pool, &(c->size), line, err_prefix);
     if (err_message) return err_message;

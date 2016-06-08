@@ -19,9 +19,7 @@
 #define APR_WANT_MEMFUNC
 #include <apr_want.h>
 
-#if defined(WIN32)
 #define CMD_FUNC (cmd_func)
-#endif
 
 // signatures in big endian, to autodetect tile type
 #define PNG_SIG 0x89504e47
