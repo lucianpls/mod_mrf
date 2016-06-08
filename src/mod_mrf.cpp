@@ -88,7 +88,7 @@ static char *get_xyzc_size(apr_pool_t *p, struct sz *size, const char *value, co
 
 // Converts a 64bit value into 13 trigesimal chars
 static void uint64tobase32(apr_uint64_t value, char *buffer, int flag = 0) {
-    static char *letters = "0123456789abcdefghijklmnopqrstuv";
+    static char letters[] = "0123456789abcdefghijklmnopqrstuv";
     // From the bottom up
     for (int i = 0; i < 13; i++, value >>= 5)
         buffer[12 - i] = letters[value & 0x1f];
@@ -271,23 +271,29 @@ static const char *mrf_file_set(cmd_parms *cmd, void *dconf, const char *arg)
     if (apr_strnatcmp(efname, c->datafname) || c->esize) {
         apr_file_t *efile;
         apr_off_t offset = c->eoffset;
+        apr_status_t stat;
 
         // Use the temp pool for the file open, it will close it for us
         if (!c->esize) { // Don't know the size, get it from the file
-            apr_finfo_t fstatus;
-            if (APR_SUCCESS == apr_stat(&fstatus, efname, APR_FINFO_CSIZE, cmd->temp_pool))
-                c->esize = (apr_uint64_t)fstatus.csize;
-            else
-                return apr_psprintf(cmd->pool, "Can't stat %s", efname);
+            apr_finfo_t finfo;
+            stat = apr_stat(&finfo, efname, APR_FINFO_CSIZE, cmd->temp_pool);
+            if (APR_SUCCESS != stat)
+                return apr_psprintf(cmd->pool, "Can't stat %s %pm", efname, stat);
+            c->esize = (apr_uint64_t)finfo.csize;
         }
-        if (APR_SUCCESS != apr_file_open(&efile, efname, APR_FOPEN_READ | APR_FOPEN_BINARY, 0, cmd->temp_pool))
-            return apr_psprintf(cmd->pool, "Can't open empty file %s, loaded from %s: %s", 
-                efname, arg, strerror(errno));
+        stat = apr_file_open(&efile, efname, APR_FOPEN_READ | APR_FOPEN_BINARY, 0, cmd->temp_pool);
+        if (APR_SUCCESS != stat)
+            return apr_psprintf(cmd->pool, "Can't open empty file %s, loaded from %s: %pm", 
+                efname, arg, stat);
         c->empty = (apr_uint32_t *) apr_palloc(cmd->pool, c->esize);
+        stat = apr_file_seek(efile, APR_SET, &offset);
+        if (APR_SUCCESS != stat)
+            return apr_psprintf(cmd->pool, "Can't seek empty tile %s: %pm", efile, stat);
         apr_size_t size = (apr_size_t)c->esize;
-        if (APR_SUCCESS != apr_file_read(efile, c->empty, &size))
-            return apr_psprintf(cmd->pool, "Can't read from %s, loaded from %s: %s",
-                efname, arg, strerror(errno));
+        stat = apr_file_read(efile, c->empty, &size);
+        if (APR_SUCCESS != stat)
+            return apr_psprintf(cmd->pool, "Can't read from %s, loaded from %s: %pm",
+                efname, arg, stat);
         apr_file_close(efile);
     }
 
