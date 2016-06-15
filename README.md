@@ -4,11 +4,11 @@ An apache module that serves tiles directly from a local MRF, 2D or 3D
 
 This module takes two apache configuration directives:
 
- **OE_MRF <On|Off>**
+ **OE_MRF On|Off**
  
  Defaults to on if the OE_MRF_ConfigurationFile is provided
 
- **OE_MRF_ConfigurationFile  <Filename>**
+ **OE_MRF_ConfigurationFile  Filename**
 
  Points to a file that contains lines, where the first word on a line is a directive, followed by parameters
  - Empty lines, lines that start with # are considered comments
@@ -16,13 +16,13 @@ This module takes two apache configuration directives:
 
  Known directives for this module are:
 
-  **Size X Y <Z> <C>**
+  **Size X Y Z C**
   - Mandatory, the size in pixels of the input MRF.  Z defaults to 1 and C defaults to 3 (usually not meaningful)
 
   **DataFile string**
   - Mandatory, the data file of the MRF.
   
-  **PageSize X Y <1> <C>**
+  **PageSize X Y 1 C**
   - Optional, the pagesize in pixels.  X and Y default to 512. Z has to be 1 if C is provided, which has to match the C value from size
 
   **IndexFile string**
@@ -33,12 +33,12 @@ This module takes two apache configuration directives:
   **MimeType string**
   - Optional.  Defaults to autodetect
 
-  **EmptyTile <Size> <Offset> <FileName>**
+  **EmptyTile Size Offset FileName**
   - Optional.  By default it ignores the request if a tile is missing.
   First number is assumed to be the size, second is offset.
   If filename is not provided, it uses the data file name.
 
-  **SkippedLevels <N>**
+  **SkippedLevels N**
   - Optional, how many levels to ignore, at the top of the MRF pyramid.
   For example a GCS pyramid will have to skip the one tile level, so this should be 1
  
