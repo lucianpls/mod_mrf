@@ -1,20 +1,18 @@
 # mod_mrf
 
-An apache module that serves tiles directly from a local MRF, 2D or 3D
-
+An apache module that serves tiles directly from a local MRF, 2D or 3D. 
 This module takes two apache configuration directives:
 
- **OE_MRF On|Off**
+ **MRF On|Off**
  
- Defaults to on if the OE_MRF_ConfigurationFile is provided
+ Defaults to on if the MRF_ConfigurationFile is provided
 
- **OE_MRF_ConfigurationFile  Filename**
+ **MRF_ConfigurationFile  Filename**
 
  Points to a file that contains lines, where the first word on a line is a directive, followed by parameters
  - Empty lines, lines that start with # are considered comments
  - Unknown directives are ignored
-
- Known directives for this module are:
+ - Known directives for this module are:
 
   **Size X Y Z C**
   - Mandatory, the size in pixels of the input MRF.  Z defaults to 1 and C defaults to 3 (usually not meaningful)
@@ -31,7 +29,7 @@ This module takes two apache configuration directives:
   Otherwise it uses the datafile name with the extension changed to .idx
  
   **MimeType string**
-  - Optional.  Defaults to autodetect
+  - Optional.  Defaults to autodetect.
 
   **EmptyTile Size Offset FileName**
   - Optional.  By default it ignores the request if a tile is missing.
@@ -45,5 +43,5 @@ This module takes two apache configuration directives:
   **ETagSeed base32_string**
   - Optional, 64 bits in base32 digits.  Defaults to 0.  
   The empty tile ETag will be this value but bit 64 (65th bit) is set. All the other tiles
-  have ETags that depend on this one and bit 64 is zero
+  have 64 bit ETags that depend on this value.
  

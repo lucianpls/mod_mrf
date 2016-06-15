@@ -416,7 +416,7 @@ static int handler(request_rec *r)
 static const command_rec mrf_cmds[] =
 {
     AP_INIT_FLAG(
-        "OE_MRF",
+        "MRF",
         CMD_FUNC ap_set_flag_slot,
         (void *)APR_OFFSETOF(mrf_conf, enabled),
         ACCESS_CONF,
@@ -424,7 +424,7 @@ static const command_rec mrf_cmds[] =
     ),
 
     AP_INIT_TAKE1(
-        "OE_MRF_ConfigurationFile",
+        "MRF_ConfigurationFile",
         CMD_FUNC mrf_file_set, // Callback
         0, // Self-pass argument
         ACCESS_CONF, // availability
