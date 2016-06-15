@@ -157,7 +157,7 @@ static void mrf_init(apr_pool_t *p, mrf_conf *c) {
   Mandatory, the size in pixels of the input MRF.  Z defaults to 1 and C defaults to 3 (usually not meaningful)
 
   PageSize X Y <1> <C>
-  Optional, the pagesize in pixels.  Z has to be 1 if C is provided, which has to match the C value from size
+  Optional, the pagesize in pixels.  X and Y default to 512. Z has to be 1 if C is provided, which has to match the C value from size
 
   DataFile string
   Mandatory, the data file of the MRF.
@@ -338,7 +338,7 @@ static int send_empty_tile(request_rec *r) {
     return send_image(r, cfg->empty, cfg->esize);
 }
 
-// For now just open the file
+// For now just open the file for reading
 apr_status_t open_file(request_rec *r, apr_file_t **pfh, const char *name)
 {
     return apr_file_open(pfh, name, 
