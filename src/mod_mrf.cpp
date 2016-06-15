@@ -43,7 +43,7 @@ static apr_table_t *read_pKVP_from_file(apr_pool_t *pool, const char *fname, cha
     apr_status_t s = ap_pcfg_openfile(&cfg_file, pool, fname);
 
     if (APR_SUCCESS != s) { // %pm means print status error string
-        *err_message = apr_psprintf(pool, "%s - %pm", fname, s);
+        *err_message = apr_psprintf(pool, "%s - %pm", fname, &s);
         return NULL;
     }
 
@@ -125,15 +125,15 @@ static void mrf_init(apr_pool_t *p, mrf_conf *c) {
     level.height = 1 + (c->size.y - 1) / c->pagesize.y;
     level.offset = 0;
     // How many levels we have
-    c->n_levels = 1 + ilogb(max(level.height, level.width) -1);
+    c->n_levels = 2 + ilogb(max(level.height, level.width) -1);
     c->rsets = (struct rset *)apr_pcalloc(p, sizeof(rset) * c->n_levels);
 
     // Populate rsets from the bottom, the way tile protcols count levels
     struct rset *r = c->rsets + c->n_levels - 1;
     for (int i = 0; i < c->n_levels; i++) {
-        *r = level;
+        *r-- = level;
         // Prepare for the next level, assuming powers of two
-        level.offset += sizeof(TIdx) * level.width * level.height;
+        level.offset += sizeof(TIdx) * level.width * level.height * c->size.z;
         level.width = 1 + (level.width - 1) / 2;
         level.height = 1 + (level.height - 1) / 2;
     }
@@ -300,7 +300,8 @@ static const char *mrf_file_set(cmd_parms *cmd, void *dconf, const char *arg)
     line = apr_table_get(kvp, "ETagSeed");
     // Ignore the flag
     int flag;
-    c->seed = base32decode((unsigned char *)line, &flag);
+    c->seed = line ? base32decode((unsigned char *)line, &flag) : 0;
+    c->enabled = 1;
     return NULL;
 }
 
@@ -350,7 +351,7 @@ apr_status_t open_file(request_rec *r, apr_file_t **pfh, const char *name)
 static int handler(request_rec *r)
 {
     // Only get and no arguments
-    if (r->method != M_GET) return DECLINED;
+    if (r->method_number != M_GET) return DECLINED;
     if (r->args) return DECLINED;
 
     mrf_conf *cfg = (mrf_conf *)ap_get_module_config(r->per_dir_config, &mrf_module);
@@ -367,13 +368,13 @@ static int handler(request_rec *r)
     memset(&tile, 0, sizeof(tile));
 
     // Need at least three numerical arguments
-    tile.x = apr_atoi64((char *)apr_array_pop(tokens)); REQ_ERR_IF(errno);
-    tile.y = apr_atoi64((char *)apr_array_pop(tokens)); REQ_ERR_IF(errno);
-    tile.c = apr_atoi64((char *)apr_array_pop(tokens)); REQ_ERR_IF(errno);
+    tile.x = apr_atoi64(*(char **)apr_array_pop(tokens)); REQ_ERR_IF(errno);
+    tile.y = apr_atoi64(*(char **)apr_array_pop(tokens)); REQ_ERR_IF(errno);
+    tile.c = apr_atoi64(*(char **)apr_array_pop(tokens)); REQ_ERR_IF(errno);
 
     // We can ignore the error on this one, defaults to zero
     if (tokens->nelts)
-        tile.z = apr_atoi64((char *)apr_array_pop(tokens));
+        tile.z = apr_atoi64(*(char **)apr_array_pop(tokens));
 
     tile.c += cfg->skip_levels;
     REQ_ERR_IF(tile.c > cfg->n_levels);
@@ -395,7 +396,7 @@ static int handler(request_rec *r)
 
     // MRF index record is in network order
     index.size = ntoh64(index.size);
-    index.size = ntoh64(index.offset);
+    index.offset = ntoh64(index.offset);
 
     if (index.size < 4) // Need at least four bytes for signature check
         send_empty_tile(r);
@@ -419,7 +420,7 @@ static const command_rec mrf_cmds[] =
         CMD_FUNC ap_set_flag_slot,
         (void *)APR_OFFSETOF(mrf_conf, enabled),
         ACCESS_CONF,
-        "mod_mrf enable"
+        "mod_mrf enable, defaults to on if configuration is provided"
     ),
 
     AP_INIT_TAKE1(
