@@ -19,7 +19,7 @@ static void *create_dir_config(apr_pool_t *p, char *dummy)
 }
 
 //
-// Tokenize a string into a table
+// Tokenize a string into an array
 //  
 static apr_array_header_t* tokenize(apr_pool_t *p, const char *s, char sep = '/')
 {
@@ -129,6 +129,7 @@ static void mrf_init(apr_pool_t *p, mrf_conf *c) {
     c->rsets = (struct rset *)apr_pcalloc(p, sizeof(rset) * c->n_levels);
 
     // Populate rsets from the bottom, the way tile protcols count levels
+    // These are MRF rsets, not all of them are visible
     struct rset *r = c->rsets + c->n_levels - 1;
     for (int i = 0; i < c->n_levels; i++) {
         *r-- = level;
@@ -345,8 +346,14 @@ apr_status_t open_file(request_rec *r, apr_file_t **pfh, const char *name)
         APR_FOPEN_READ | APR_FOPEN_BINARY | APR_FOPEN_LARGEFILE, NULL, r->pool);
 }
 
-#define REQ_ERR_IF(X) if (X) return HTTP_BAD_REQUEST
-#define SERR_IF(X) if (X) return HTTP_INTERNAL_SERVER_ERROR
+#define REQ_ERR_IF(X) if (X) {\
+    return HTTP_BAD_REQUEST; \
+}
+
+#define SERR_IF(X, msg) if (X) { \
+    ap_log_error(APLOG_MARK, APLOG_ERR, 0, r->server, msg);\
+    return HTTP_INTERNAL_SERVER_ERROR; \
+}
 
 static int handler(request_rec *r)
 {
@@ -376,7 +383,12 @@ static int handler(request_rec *r)
     if (tokens->nelts)
         tile.z = apr_atoi64(*(char **)apr_array_pop(tokens));
 
+    // Don't allow access to levels less than zero
+    if (tile.c < 0)
+        return send_empty_tile(r);
+
     tile.c += cfg->skip_levels;
+    // Check for bad requests, outside of the defined bounds
     REQ_ERR_IF(tile.c > cfg->n_levels);
     rset *level = cfg->rsets + tile.c;
     REQ_ERR_IF(tile.x >= level->width || tile.y >= level->height);
@@ -386,30 +398,40 @@ static int handler(request_rec *r)
         sizeof(TIdx) * (tile.x + level->width * (tile.z * level->height + tile.y));
 
     apr_file_t *idxf, *dataf;
-    SERR_IF(open_file(r, &idxf, cfg->idxfname));
-    SERR_IF(open_file(r, &dataf, cfg->datafname));
-    SERR_IF(apr_file_seek(idxf, APR_SET, &tidx_offset));
+    SERR_IF(open_file(r, &idxf, cfg->idxfname),
+        apr_psprintf(r->pool, "Can't open %s", cfg->idxfname));
+    SERR_IF(open_file(r, &dataf, cfg->datafname),
+        apr_psprintf(r->pool, "Can't open %s", cfg->datafname));
+    SERR_IF(apr_file_seek(idxf, APR_SET, &tidx_offset), 
+        apr_psprintf(r->pool, "Tile doesn't exist in %s", cfg->datafname));
     TIdx index;
     apr_size_t read_size = sizeof(index);
-    SERR_IF(apr_file_read(idxf, &index, &read_size));
-    SERR_IF(read_size != sizeof(index));
+    SERR_IF(apr_file_read(idxf, &index, &read_size) || read_size != sizeof(index),
+        apr_psprintf(r->pool, "Tile doesn't exist in %s", cfg->datafname));
 
     // MRF index record is in network order
     index.size = ntoh64(index.size);
     index.offset = ntoh64(index.offset);
 
     if (index.size < 4) // Need at least four bytes for signature check
-        send_empty_tile(r);
+        return send_empty_tile(r);
+
+    if (MAX_TILE_SIZE < index.size) { // Tile is too large, log and send error code
+        ap_log_error(APLOG_MARK, APLOG_ERR, 0, r->server, "Tile too large in %s", cfg->idxfname);
+        return HTTP_INTERNAL_SERVER_ERROR;
+    }
 
     // TODO: Check ETag conditional
 
     // We got the tile index, and is not empty
     apr_uint32_t *buffer = (apr_uint32_t *) apr_palloc(r->pool, index.size);
-    SERR_IF(!buffer);
-    SERR_IF(apr_file_seek(dataf, APR_SET, (apr_off_t *)&index.offset));
+    SERR_IF(!buffer,
+        "Memory allocation error in mod_mrf");
+    SERR_IF(apr_file_seek(dataf, APR_SET, (apr_off_t *)&index.offset),
+        apr_psprintf(r->pool, "Seek error in %s", cfg->datafname));
     read_size = index.size;
-    SERR_IF(apr_file_read(dataf, buffer, &read_size));
-    SERR_IF(read_size != index.size);
+    SERR_IF(apr_file_read(dataf, buffer, &read_size) || read_size != index.size,
+        apr_psprintf(r->pool, "Can't read from %s", cfg->datafname));
     return send_image(r, buffer, read_size);
 }
 

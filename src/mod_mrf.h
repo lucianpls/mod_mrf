@@ -21,6 +21,9 @@
 
 #define CMD_FUNC (cmd_func)
 
+// The maximum size of a tile, to avoid MRF corruption errors
+#define MAX_TILE_SIZE 4*1024*1024
+
 // signatures in big endian, to autodetect tile type
 #define PNG_SIG 0x89504e47
 #define JPEG_SIG 0xffd8ffe0

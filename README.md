@@ -9,7 +9,7 @@ This module takes two apache configuration directives:
 
  **MRF_ConfigurationFile  Filename**
 
- Points to a file that contains lines, where the first word on a line is a directive, followed by parameters
+ Points to a text file that contains lines, where the first word on a line is a directive, followed by parameters
  - Empty lines, lines that start with # are considered comments
  - Unknown directives are ignored
  - Known directives for this module are:
