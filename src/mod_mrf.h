@@ -75,6 +75,8 @@ typedef struct {
 } TIdx;
 
 typedef struct {
+    // array of guard regexp, one of them has to match
+    apr_array_header_t *regexp;
     // The mrf data file name
     char *datafname;     
     // The mrf index file name

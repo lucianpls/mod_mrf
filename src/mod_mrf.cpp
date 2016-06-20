@@ -268,6 +268,22 @@ static const char *mrf_file_set(cmd_parms *cmd, void *dconf, const char *arg)
             efname = last;
     }
 
+    // Allow for one or more RegExp guard
+    // One of them has to match if the request is to be considered
+    line = apr_table_get(kvp, "RegExp");
+    if (line) {
+        if (c->regexp == 0)
+            c->regexp = apr_array_make(cmd->pool, 2, sizeof(ap_regex_t));
+        ap_regex_t *m = (ap_regex_t *)apr_array_push(c->regexp);
+        int error = ap_regcomp(m, line, 0);
+        if (error) {
+            int msize = 2048;
+            char *message = (char *)apr_pcalloc(cmd->pool, msize);
+            ap_regerror(error, m, message, msize);
+            return apr_psprintf(cmd->pool, "MRF Regexp failed for %s %s", line, message);
+        }
+    }
+
     // If we're provided a file name or a size, pre-read the empty tile in the 
     if (apr_strnatcmp(efname, c->datafname) || c->esize) {
         apr_file_t *efile;
@@ -359,12 +375,22 @@ static int handler(request_rec *r)
 {
     // Only get and no arguments
     if (r->method_number != M_GET) return DECLINED;
-    if (r->args) return DECLINED;
+    if (r->args) return DECLINED; // Don't accept arguments
 
     mrf_conf *cfg = (mrf_conf *)ap_get_module_config(r->per_dir_config, &mrf_module);
-    if (!cfg || !cfg->enabled) return DECLINED;
+    if (!cfg->enabled) return DECLINED; // Not enabled
 
-    // TODO: add a guard regexp here
+    if (cfg->regexp) { // Check the guard regexps if they exist, matches agains URL
+        int i;
+        char * url_to_match = r->args ? apr_pstrcat(r->pool, r->uri, "?", r->args, NULL) : r->uri;
+        for (i = 0; i < cfg->regexp->nelts; i++) {
+            ap_regex_t *m = &APR_ARRAY_IDX(cfg->regexp, i, ap_regex_t);
+            if (ap_regexec(m, url_to_match, 0, NULL, 0)) continue; // Not matched
+            break;
+        }
+        if (i == cfg->regexp->nelts) // No match found
+            return DECLINED;
+    }
 
     apr_array_header_t *tokens = tokenize(r->pool, r->uri, '/');
     if (tokens->nelts < 3) return DECLINED; // At least Level Row Column
