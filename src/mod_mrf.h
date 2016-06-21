@@ -93,8 +93,9 @@ typedef struct {
     int n_levels;
     struct rset *rsets;
 
-    // Empty tile, if provided
+    // Empty tile buffer, if provided
     apr_uint32_t *empty;
+    // Size of empty tile, in bytes
     apr_int64_t esize;
     apr_off_t eoffset;
 
@@ -103,6 +104,8 @@ typedef struct {
 
     // ETag initializer
     apr_uint64_t seed;
+    // Buffer for the emtpy tile etag
+    char eETag[16];
 
 } mrf_conf;
 

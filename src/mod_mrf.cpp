@@ -88,19 +88,23 @@ static char *get_xyzc_size(apr_pool_t *p, struct sz *size, const char *value, co
 
 // Converts a 64bit value into 13 trigesimal chars
 static void uint64tobase32(apr_uint64_t value, char *buffer, int flag = 0) {
-    static char letters[] = "0123456789abcdefghijklmnopqrstuv";
+    static char b32digits[] = "0123456789abcdefghijklmnopqrstuv";
     // From the bottom up
+    buffer[13] = 0; // End of string marker
     for (int i = 0; i < 13; i++, value >>= 5)
-        buffer[12 - i] = letters[value & 0x1f];
+        buffer[12 - i] = b32digits[value & 0x1f];
     buffer[0] |= flag << 4; // empty flag goes in top bit
 }
 
 // Return the value from a base 32 character
 // Returns a negative value if char is not a valid base32 char
 static int b32(unsigned char c) {
+    if (c - '0' < 0) return -1;
     if (c - '0' < 10) return c - '0';
-    if (c - 'A' < 32) return c - 'A';
-    if (c - 'a' < 32) return c - 'a';
+    if (c - 'A' < 0) return -1;
+    if (c - 'A' < 22) return c - 'A' + 10;
+    if (c - 'a' < 0) return -1;
+    if (c - 'a' < 22) return c - 'a' + 10;
     return -1;
 }
 
@@ -280,7 +284,7 @@ static const char *mrf_file_set(cmd_parms *cmd, void *dconf, const char *arg)
             int msize = 2048;
             char *message = (char *)apr_pcalloc(cmd->pool, msize);
             ap_regerror(error, m, message, msize);
-            return apr_psprintf(cmd->pool, "MRF Regexp failed for %s %s", line, message);
+            return apr_psprintf(cmd->pool, "MRF Regexp incorrect %s %s", line, message);
         }
     }
 
@@ -318,12 +322,19 @@ static const char *mrf_file_set(cmd_parms *cmd, void *dconf, const char *arg)
     // Ignore the flag
     int flag;
     c->seed = line ? base32decode((unsigned char *)line, &flag) : 0;
+    // Set the missing tile etag, with the extra bit set
+    uint64tobase32(c->seed, c->eETag, 1);
     c->enabled = 1;
     return NULL;
 }
 
-static int send_image(request_rec *r, apr_uint32_t *buffer, apr_size_t size) {
-    // TODO: Send the image
+static int etag_matches(request_rec *r, const char *ETag) {
+    const char *ETagIn = apr_table_get(r->headers_in, "If-None-Match");
+    return ETagIn != 0 && strstr(ETagIn, ETag);
+}
+
+static int send_image(request_rec *r, apr_uint32_t *buffer, apr_size_t size)
+{
     mrf_conf *cfg = (mrf_conf *)ap_get_module_config(r->per_dir_config, &mrf_module);
     if (cfg->mime_type)
         ap_set_content_type(r, cfg->mime_type);
@@ -351,6 +362,11 @@ static int send_image(request_rec *r, apr_uint32_t *buffer, apr_size_t size) {
 // Returns the empty tile if defined
 static int send_empty_tile(request_rec *r) {
     mrf_conf *cfg = (mrf_conf *)ap_get_module_config(r->per_dir_config, &mrf_module);
+    if (etag_matches(r, cfg->eETag)) {
+        apr_table_setn(r->headers_out, "ETag", cfg->eETag);
+        return HTTP_NOT_MODIFIED;
+    }
+
     if (!cfg->empty) return DECLINED;
     return send_image(r, cfg->empty, cfg->esize);
 }
@@ -426,8 +442,6 @@ static int handler(request_rec *r)
     apr_file_t *idxf, *dataf;
     SERR_IF(open_file(r, &idxf, cfg->idxfname),
         apr_psprintf(r->pool, "Can't open %s", cfg->idxfname));
-    SERR_IF(open_file(r, &dataf, cfg->datafname),
-        apr_psprintf(r->pool, "Can't open %s", cfg->datafname));
     SERR_IF(apr_file_seek(idxf, APR_SET, &tidx_offset), 
         apr_psprintf(r->pool, "Tile doesn't exist in %s", cfg->datafname));
     TIdx index;
@@ -447,7 +461,17 @@ static int handler(request_rec *r)
         return HTTP_INTERNAL_SERVER_ERROR;
     }
 
-    // TODO: Check ETag conditional
+    // Check for conditional ETag here, no need to open the data file
+    char *ETag = (char *)apr_palloc(r->pool, 16);
+    // Try to distribute the bits a bit to generate an ETag
+    uint64tobase32(cfg->seed ^ (index.size << 40) ^ index.offset, ETag);
+    if (etag_matches(r, ETag)) {
+        apr_table_setn(r->headers_out, "ETag", ETag);
+        return HTTP_NOT_MODIFIED;
+    }
+
+    SERR_IF(open_file(r, &dataf, cfg->datafname),
+        apr_psprintf(r->pool, "Can't open %s", cfg->datafname));
 
     // We got the tile index, and is not empty
     apr_uint32_t *buffer = (apr_uint32_t *) apr_palloc(r->pool, index.size);
@@ -458,6 +482,9 @@ static int handler(request_rec *r)
     read_size = index.size;
     SERR_IF(apr_file_read(dataf, buffer, &read_size) || read_size != index.size,
         apr_psprintf(r->pool, "Can't read from %s", cfg->datafname));
+
+    // Looks fine, set the outgoing etag and then the image
+    apr_table_setn(r->headers_out, "ETag", ETag);
     return send_image(r, buffer, read_size);
 }
 
