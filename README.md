@@ -15,10 +15,13 @@ This module takes two apache configuration directives:
  - Known directives for this module are:
 
   **Size X Y Z C**
-  - Mandatory, the size in pixels of the input MRF.  Z defaults to 1 and C defaults to 3 (usually not meaningful)
+  - Mandatory, at least x and y, the size in pixels of the input MRF.  Z defaults to 1 and C defaults to 3 (these are usually not meaningful)
 
   **DataFile string**
-  - Mandatory, the data file of the MRF.
+  - Mandatory, the path to the data file of the MRF.
+
+  **RegExp**
+  - Optional, a regular expression that must match the request URL for it to be considered a tile request.  By default all URLs are considered tile requests.  This directive can appear multiple times.  If there are multiple RegExp lines, at least one has to match the request URL.
   
   **PageSize X Y 1 C**
   - Optional, the pagesize in pixels.  X and Y default to 512. Z has to be 1 if C is provided, which has to match the C value from size
