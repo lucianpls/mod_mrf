@@ -106,6 +106,8 @@ typedef struct {
     apr_uint64_t seed;
     // Buffer for the emtpy tile etag
     char eETag[16];
+    // The internal redirect path or null
+    char *redirect;
 
 } mrf_conf;
 

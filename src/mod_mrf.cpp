@@ -99,11 +99,11 @@ static void uint64tobase32(apr_uint64_t value, char *buffer, int flag = 0) {
 // Return the value from a base 32 character
 // Returns a negative value if char is not a valid base32 char
 static int b32(unsigned char c) {
-    if (c - '0' < 0) return -1;
+    if (c - '0' <  0) return -1;
     if (c - '0' < 10) return c - '0';
-    if (c - 'A' < 0) return -1;
+    if (c - 'A' <  0) return -1;
     if (c - 'A' < 22) return c - 'A' + 10;
-    if (c - 'a' < 0) return -1;
+    if (c - 'a' <  0) return -1;
     if (c - 'a' < 22) return c - 'a' + 10;
     return -1;
 }
@@ -288,8 +288,12 @@ static const char *mrf_file_set(cmd_parms *cmd, void *dconf, const char *arg)
         }
     }
 
+    line = apr_table_get(kvp, "Redirect");
+    if (line)
+        c->redirect = apr_pstrdup(cmd->pool, line);
+
     // If we're provided a file name or a size, pre-read the empty tile in the 
-    if (apr_strnatcmp(efname, c->datafname) || c->esize) {
+    if (c->datafname && (apr_strnatcmp(efname, c->datafname) || c->esize)) {
         apr_file_t *efile;
         apr_off_t offset = c->eoffset;
         apr_status_t stat;
@@ -470,22 +474,42 @@ static int handler(request_rec *r)
         return HTTP_NOT_MODIFIED;
     }
 
-    SERR_IF(open_file(r, &dataf, cfg->datafname),
-        apr_psprintf(r->pool, "Can't open %s", cfg->datafname));
+    // Is it a local file?
+    if (cfg->datafname) {
+        SERR_IF(open_file(r, &dataf, cfg->datafname),
+            apr_psprintf(r->pool, "Can't open %s", cfg->datafname));
 
-    // We got the tile index, and is not empty
-    apr_uint32_t *buffer = (apr_uint32_t *) apr_palloc(r->pool, index.size);
-    SERR_IF(!buffer,
-        "Memory allocation error in mod_mrf");
-    SERR_IF(apr_file_seek(dataf, APR_SET, (apr_off_t *)&index.offset),
-        apr_psprintf(r->pool, "Seek error in %s", cfg->datafname));
-    read_size = index.size;
-    SERR_IF(apr_file_read(dataf, buffer, &read_size) || read_size != index.size,
-        apr_psprintf(r->pool, "Can't read from %s", cfg->datafname));
+        // We got the tile index, and is not empty
+        apr_uint32_t *buffer = (apr_uint32_t *)apr_palloc(r->pool, index.size);
+        SERR_IF(!buffer,
+            "Memory allocation error in mod_mrf");
+        SERR_IF(apr_file_seek(dataf, APR_SET, (apr_off_t *)&index.offset),
+            apr_psprintf(r->pool, "Seek error in %s", cfg->datafname));
+        read_size = index.size;
+        SERR_IF(apr_file_read(dataf, buffer, &read_size) || read_size != index.size,
+            apr_psprintf(r->pool, "Can't read from %s", cfg->datafname));
 
-    // Looks fine, set the outgoing etag and then the image
-    apr_table_setn(r->headers_out, "ETag", ETag);
-    return send_image(r, buffer, read_size);
+        // Looks fine, set the outgoing etag and then the image
+        apr_table_setn(r->headers_out, "ETag", ETag);
+        return send_image(r, buffer, read_size);
+    }
+    else if (cfg->redirect) {
+        // This fundamentally works, but needs more work to make it useful
+        // TODO: Catch response and rebuild output headers
+        // TODO: S3 authorized requests
+
+        // Data file is on a remote site a range request redirect with a range header
+        const char *fmt = "bytes=%" APR_UINT64_T_FMT "-%" APR_UINT64_T_FMT;
+        char *Range = apr_psprintf(r->pool, fmt, index.offset, index.offset + index.size);
+        apr_table_setn(r->headers_in, "Range", Range);
+        // Fancy options need authorization
+        //        if (cfg->mime_type)
+        //              apr_table_setn(r->headers_in, "response-content-type", cfg->mime_type);
+        ap_internal_redirect(cfg->redirect, r);
+        return OK;
+    }
+    else
+        SERR_IF(true, apr_psprintf(r->pool, "No data file configured for %s", r->uri));
 }
 
 static const command_rec mrf_cmds[] =
