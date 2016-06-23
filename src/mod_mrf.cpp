@@ -5,6 +5,7 @@
 */
 
 #include "mod_mrf.h"
+#include "receive_context.h"
 
 #include <algorithm>
 #include <cmath>
@@ -474,13 +475,18 @@ static int handler(request_rec *r)
         return HTTP_NOT_MODIFIED;
     }
 
-    // Is it a local file?
-    if (cfg->datafname) {
+    // Now for the data part
+
+    if (!cfg->datafname && !cfg->redirect)
+        SERR_IF(true, apr_psprintf(r->pool, "No data file configured for %s", r->uri));
+
+    apr_uint32_t *buffer = (apr_uint32_t *)apr_palloc(r->pool, index.size);
+
+    if (cfg->datafname) { // Read from a local file
         SERR_IF(open_file(r, &dataf, cfg->datafname),
             apr_psprintf(r->pool, "Can't open %s", cfg->datafname));
 
         // We got the tile index, and is not empty
-        apr_uint32_t *buffer = (apr_uint32_t *)apr_palloc(r->pool, index.size);
         SERR_IF(!buffer,
             "Memory allocation error in mod_mrf");
         SERR_IF(apr_file_seek(dataf, APR_SET, (apr_off_t *)&index.offset),
@@ -488,28 +494,39 @@ static int handler(request_rec *r)
         read_size = index.size;
         SERR_IF(apr_file_read(dataf, buffer, &read_size) || read_size != index.size,
             apr_psprintf(r->pool, "Can't read from %s", cfg->datafname));
-
-        // Looks fine, set the outgoing etag and then the image
-        apr_table_setn(r->headers_out, "ETag", ETag);
-        return send_image(r, buffer, read_size);
     }
-    else if (cfg->redirect) {
-        // This fundamentally works, but needs more work to make it useful
-        // TODO: Catch response and rebuild output headers
+    else { // use a subrequest to fetch data
         // TODO: S3 authorized requests
+        ap_filter_rec_t *receive_filter = ap_get_output_filter_handle("Receive");
+        SERR_IF(!receive_filter, "Redirect needs mod_receive to be available");
+        
+        // Get a buffer for the received image
+        receive_ctx rctx;
+        rctx.buffer = (char *)buffer;
+        rctx.maxsize = index.size;
+        rctx.size = 0;
+
+        ap_filter_t *rf = ap_add_output_filter_handle(receive_filter, &rctx, r, r->connection);
+        request_rec *sr = ap_sub_req_lookup_uri(cfg->redirect, r, r->output_filters);
 
         // Data file is on a remote site a range request redirect with a range header
         const char *fmt = "bytes=%" APR_UINT64_T_FMT "-%" APR_UINT64_T_FMT;
         char *Range = apr_psprintf(r->pool, fmt, index.offset, index.offset + index.size);
-        apr_table_setn(r->headers_in, "Range", Range);
-        // Fancy options need authorization
-        //        if (cfg->mime_type)
-        //              apr_table_setn(r->headers_in, "response-content-type", cfg->mime_type);
-        ap_internal_redirect(cfg->redirect, r);
-        return OK;
+        apr_table_setn(sr->headers_in, "Range", Range);
+
+        int status = ap_run_sub_req(sr);
+        ap_remove_output_filter(rf);
+
+        if (status != APR_SUCCESS || sr->status != HTTP_PARTIAL_CONTENT || rctx.size != index.size) {
+            ap_log_rerror(APLOG_MARK, APLOG_ERR, 0, r, "Can't fetch data from %s", cfg->redirect);
+            return HTTP_SERVICE_UNAVAILABLE;
+        }
+        apr_table_clear(r->headers_out);
     }
-    else
-        SERR_IF(true, apr_psprintf(r->pool, "No data file configured for %s", r->uri));
+
+    // Looks fine, set the outgoing etag and then the image
+    apr_table_setn(r->headers_out, "ETag", ETag);
+    return send_image(r, buffer, index.size);
 }
 
 static const command_rec mrf_cmds[] =
