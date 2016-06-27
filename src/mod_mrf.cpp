@@ -100,27 +100,21 @@ static void uint64tobase32(apr_uint64_t value, char *buffer, int flag = 0) {
 // Return the value from a base 32 character
 // Returns a negative value if char is not a valid base32 char
 static int b32(unsigned char c) {
-    if (c - '0' <  0) return -1;
+    if (c < '0') return -1;
     if (c - '0' < 10) return c - '0';
-    if (c - 'A' <  0) return -1;
+    if (c < 'A') return -1;
     if (c - 'A' < 22) return c - 'A' + 10;
-    if (c - 'a' <  0) return -1;
+    if (c < 'a') return -1;
     if (c - 'a' < 22) return c - 'a' + 10;
     return -1;
 }
 
 static apr_uint64_t base32decode(unsigned char *s, int *flag) {
     apr_int64_t value = 0;
-    if (*s == '"') s++; // Skip initial quotes
-    // first char carries the flag
-    int v = b32(*s++);
-    *flag = v >> 4; // pick up the flag
-    value = v & 0xf; // Only 4 bits
-    for (; *s != 0; s++) {
-        v = b32(*s);
-        if (v < 0) break; // Stop at first non base 32 char
+    while (*s == '"') s++; // Skip initial quotes
+    *flag = (b32(*s) >> 4) & 1; // Pick up the flag from bit 5
+    for (int v = b32(*s++) & 0xf; v >= 0; v = b32(*s++))
         value = (value << 5) + v;
-    }
     return value;
 }
 
@@ -129,7 +123,7 @@ static void mrf_init(apr_pool_t *p, mrf_conf *c) {
     level.width = 1 + (c->size.x - 1) / c->pagesize.x;
     level.height = 1 + (c->size.y - 1) / c->pagesize.y;
     level.offset = 0;
-    // How many levels we have
+    // How many levels do we have
     c->n_levels = 2 + ilogb(max(level.height, level.width) -1);
     c->rsets = (struct rset *)apr_pcalloc(p, sizeof(rset) * c->n_levels);
 
@@ -427,10 +421,11 @@ static int handler(request_rec *r)
     tile.c = apr_atoi64(*(char **)apr_array_pop(tokens)); REQ_ERR_IF(errno);
 
     // We can ignore the error on this one, defaults to zero
-    if (tokens->nelts)
+    // The parameter before the level can't start with a digit for an extra-dimensional MRF
+    if (cfg->size.z != 1 && tokens->nelts)
         tile.z = apr_atoi64(*(char **)apr_array_pop(tokens));
 
-    // Don't allow access to levels less than zero
+    // Don't allow access to levels less than zero, send the empty tile instead
     if (tile.c < 0)
         return send_empty_tile(r);
 
@@ -476,13 +471,40 @@ static int handler(request_rec *r)
     }
 
     // Now for the data part
-
     if (!cfg->datafname && !cfg->redirect)
         SERR_IF(true, apr_psprintf(r->pool, "No data file configured for %s", r->uri));
 
     apr_uint32_t *buffer = (apr_uint32_t *)apr_palloc(r->pool, index.size);
 
-    if (cfg->datafname) { // Read from a local file
+    if (cfg->redirect) {
+        // TODO: S3 authorized requests
+        ap_filter_rec_t *receive_filter = ap_get_output_filter_handle("Receive");
+        SERR_IF(!receive_filter, "Redirect needs mod_receive to be available");
+
+        // Get a buffer for the received image
+        receive_ctx rctx;
+        rctx.buffer = (char *)buffer;
+        rctx.maxsize = index.size;
+        rctx.size = 0;
+
+        ap_filter_t *rf = ap_add_output_filter_handle(receive_filter, &rctx, r, r->connection);
+        request_rec *sr = ap_sub_req_lookup_uri(cfg->redirect, r, r->output_filters);
+
+        // Data file is on a remote site a range request redirect with a range header
+        static const char *rfmt = "bytes=%" APR_UINT64_T_FMT "-%" APR_UINT64_T_FMT;
+        char *Range = apr_psprintf(r->pool, rfmt, index.offset, index.offset + index.size);
+        apr_table_setn(sr->headers_in, "Range", Range);
+        int status = ap_run_sub_req(sr);
+        ap_remove_output_filter(rf);
+
+        if (status != APR_SUCCESS || sr->status != HTTP_PARTIAL_CONTENT || rctx.size != index.size) {
+            ap_log_rerror(APLOG_MARK, APLOG_ERR, 0, r, "Can't fetch data from %s", cfg->redirect);
+            return HTTP_SERVICE_UNAVAILABLE;
+        }
+        apr_table_clear(r->headers_out);
+    }
+    else
+    { // Read from a local file
         SERR_IF(open_file(r, &dataf, cfg->datafname),
             apr_psprintf(r->pool, "Can't open %s", cfg->datafname));
 
@@ -494,34 +516,6 @@ static int handler(request_rec *r)
         read_size = index.size;
         SERR_IF(apr_file_read(dataf, buffer, &read_size) || read_size != index.size,
             apr_psprintf(r->pool, "Can't read from %s", cfg->datafname));
-    }
-    else { // use a subrequest to fetch data
-        // TODO: S3 authorized requests
-        ap_filter_rec_t *receive_filter = ap_get_output_filter_handle("Receive");
-        SERR_IF(!receive_filter, "Redirect needs mod_receive to be available");
-        
-        // Get a buffer for the received image
-        receive_ctx rctx;
-        rctx.buffer = (char *)buffer;
-        rctx.maxsize = index.size;
-        rctx.size = 0;
-
-        ap_filter_t *rf = ap_add_output_filter_handle(receive_filter, &rctx, r, r->connection);
-        request_rec *sr = ap_sub_req_lookup_uri(cfg->redirect, r, r->output_filters);
-
-        // Data file is on a remote site a range request redirect with a range header
-        const char *fmt = "bytes=%" APR_UINT64_T_FMT "-%" APR_UINT64_T_FMT;
-        char *Range = apr_psprintf(r->pool, fmt, index.offset, index.offset + index.size);
-        apr_table_setn(sr->headers_in, "Range", Range);
-
-        int status = ap_run_sub_req(sr);
-        ap_remove_output_filter(rf);
-
-        if (status != APR_SUCCESS || sr->status != HTTP_PARTIAL_CONTENT || rctx.size != index.size) {
-            ap_log_rerror(APLOG_MARK, APLOG_ERR, 0, r, "Can't fetch data from %s", cfg->redirect);
-            return HTTP_SERVICE_UNAVAILABLE;
-        }
-        apr_table_clear(r->headers_out);
     }
 
     // Looks fine, set the outgoing etag and then the image
