@@ -254,15 +254,19 @@ static const char *mrf_file_set(cmd_parms *cmd, void *dconf, const char *arg)
     // If an emtpy tile is not provided, it falls through
     // If provided, it has an optional size and offset followed by file name which defaults to datafile
     // read the empty tile
-    const char *efname = c->datafname;
+   const char *efname = c->datafname; // Default file name is data file
     line = apr_table_get(kvp, "EmptyTile");
     if (line) {
         char *last;
+        // Try to read a figure first
         c->esize = apr_strtoi64(line, &last, 0);
-        // Might be an offset, or offset then file name
-        if (last != line) 
+
+        // If that worked, try to get an offset too
+        if (last != line)
             apr_strtoff(&(c->eoffset), last, &last, 0);
-        // If there is anything left, it's the file name
+
+        // If there is anything left
+        while (*last && isspace(*last)) last++;
         if (*last != 0)
             efname = last;
     }
