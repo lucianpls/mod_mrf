@@ -58,7 +58,7 @@ APLOG_USE_MODULE(mrf);
 #endif
 
 struct sz {
-    apr_int64_t x, y, z, c;
+    apr_int64_t x, y, z, c, l;
 };
 
 struct rset {

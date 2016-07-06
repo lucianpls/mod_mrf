@@ -422,7 +422,7 @@ static int handler(request_rec *r)
     // Need at least three numerical arguments
     tile.x = apr_atoi64(*(char **)apr_array_pop(tokens)); REQ_ERR_IF(errno);
     tile.y = apr_atoi64(*(char **)apr_array_pop(tokens)); REQ_ERR_IF(errno);
-    tile.c = apr_atoi64(*(char **)apr_array_pop(tokens)); REQ_ERR_IF(errno);
+    tile.l = apr_atoi64(*(char **)apr_array_pop(tokens)); REQ_ERR_IF(errno);
 
     // We can ignore the error on this one, defaults to zero
     // The parameter before the level can't start with a digit for an extra-dimensional MRF
@@ -430,13 +430,13 @@ static int handler(request_rec *r)
         tile.z = apr_atoi64(*(char **)apr_array_pop(tokens));
 
     // Don't allow access to levels less than zero, send the empty tile instead
-    if (tile.c < 0)
+    if (tile.l < 0)
         return send_empty_tile(r);
 
-    tile.c += cfg->skip_levels;
+    tile.l += cfg->skip_levels;
     // Check for bad requests, outside of the defined bounds
-    REQ_ERR_IF(tile.c > cfg->n_levels);
-    rset *level = cfg->rsets + tile.c;
+    REQ_ERR_IF(tile.l > cfg->n_levels);
+    rset *level = cfg->rsets + tile.l;
     REQ_ERR_IF(tile.x >= level->width || tile.y >= level->height);
 
     // Offset of the index entry for this tile
