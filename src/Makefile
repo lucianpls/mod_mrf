@@ -13,12 +13,12 @@ TARGET = .libs/mod_mrf.so
 # Can't use apxs to build c++ modules
 # The options used here might depend on how apache was built
 $(TARGET)       :       $(FILES)
-        libtool --silent --mode=compile g++ -prefer-pic -O2 -Wall $(DEFINES) $(INCLUDES) -pthread -c -o mod_mrf.lo $(C_SRC) && touch mod_mrf.slo
-        libtool --silent --mode=link g++ -o mod_mrf.la -rpath $(MOD_PATH) -module -avoid-version mod_mrf.lo
+	libtool --silent --mode=compile g++ -prefer-pic -O2 -Wall $(DEFINES) $(INCLUDES) -pthread -c -o mod_mrf.lo $(C_SRC) && touch mod_mrf.slo
+	libtool --silent --mode=link g++ -o mod_mrf.la -rpath $(MOD_PATH) -module -avoid-version mod_mrf.lo
 
 install : $(TARGET)
-        sudo cp $(TARGET) $(MOD_PATH)
+	sudo cp $(TARGET) $(MOD_PATH)
 
 clean   :
-        rm -rf .libs *.{o,lo,slo,la}
+	rm -rf .libs *.{o,lo,slo,la}
 
