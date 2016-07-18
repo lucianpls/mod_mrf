@@ -48,3 +48,5 @@ This module takes two apache configuration directives:
   The empty tile ETag will be this value but bit 64 (65th bit) is set. All the other tiles
   have 64 bit ETags that depend on this value.
  
+  **Redirect path**
+  - Optional, if the data file is on an object store

@@ -34,7 +34,6 @@ static apr_array_header_t* tokenize(apr_pool_t *p, const char *s, char sep = '/'
     return arr;
 }
 
-
 // Returns a table read from a file, or NULL and an error message
 static apr_table_t *read_pKVP_from_file(apr_pool_t *pool, const char *fname, char **err_message)
 
@@ -139,6 +138,24 @@ static void mrf_init(apr_pool_t *p, mrf_conf *c) {
     }
     // MRF has one tile at the top
     ap_assert(c->rsets->height == 1 && c->rsets->width == 1);
+}
+
+// Allow for one or more RegExp guard
+// If present, at least one of them has to match the URL
+static const char *set_regexp(cmd_parms *cmd, mrf_conf *c, const char *pattern)
+{
+    char *err_message = NULL;
+    if (c->regexp == 0)
+        c->regexp = apr_array_make(cmd->pool, 2, sizeof(ap_regex_t));
+    ap_regex_t *m = (ap_regex_t *)apr_array_push(c->regexp);
+    int error = ap_regcomp(m, pattern, 0);
+    if (error) {
+        int msize = 2048;
+        err_message = (char *)apr_pcalloc(cmd->pool, msize);
+        ap_regerror(error, m, err_message, msize);
+        return apr_pstrcat(cmd->pool, "MRF Regexp incorrect ", err_message, NULL);
+    }
+    return NULL;
 }
 
 /*
@@ -269,22 +286,6 @@ static const char *mrf_file_set(cmd_parms *cmd, void *dconf, const char *arg)
         while (*last && isspace(*last)) last++;
         if (*last != 0)
             efname = last;
-    }
-
-    // Allow for one or more RegExp guard
-    // One of them has to match if the request is to be considered
-    line = apr_table_get(kvp, "RegExp");
-    if (line) {
-        if (c->regexp == 0)
-            c->regexp = apr_array_make(cmd->pool, 2, sizeof(ap_regex_t));
-        ap_regex_t *m = (ap_regex_t *)apr_array_push(c->regexp);
-        int error = ap_regcomp(m, line, 0);
-        if (error) {
-            int msize = 2048;
-            char *message = (char *)apr_pcalloc(cmd->pool, msize);
-            ap_regerror(error, m, message, msize);
-            return apr_psprintf(cmd->pool, "MRF Regexp incorrect %s %s", line, message);
-        }
     }
 
     line = apr_table_get(kvp, "Redirect");
@@ -544,6 +545,13 @@ static const command_rec mrf_cmds[] =
         ACCESS_CONF, // availability
         "The configuration file for this module"
     ),
+
+    AP_INIT_TAKE1(
+    "MRF_RegExp",
+    (cmd_func)set_regexp,
+    0, // Self-pass argument
+    ACCESS_CONF, // availability
+    "Regular expression that the URL has to match.  At least one is required."),
 
     { NULL }
 };
