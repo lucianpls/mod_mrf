@@ -119,8 +119,8 @@ static apr_uint64_t base32decode(unsigned char *s, int *flag) {
 
 static void mrf_init(apr_pool_t *p, mrf_conf *c) {
     struct rset level;
-    level.width = 1 + (c->size.x - 1) / c->pagesize.x;
-    level.height = 1 + (c->size.y - 1) / c->pagesize.y;
+    level.width = static_cast<int>(1 + (c->size.x - 1) / c->pagesize.x);
+    level.height = static_cast<int>(1 + (c->size.y - 1) / c->pagesize.y);
     level.offset = 0;
     // How many levels do we have
     c->n_levels = 2 + ilogb(max(level.height, level.width) -1);
@@ -266,7 +266,7 @@ static const char *mrf_file_set(cmd_parms *cmd, void *dconf, const char *arg)
     // Skip levels, from the top of the MRF
     line = apr_table_get(kvp, "SkippedLevels");
     if (line)
-        c->skip_levels = apr_atoi64(line);
+        c->skip_levels = atoi(line);
 
     // If an emtpy tile is not provided, it falls through
     // If provided, it has an optional size and offset followed by file name which defaults to datafile
@@ -310,7 +310,7 @@ static const char *mrf_file_set(cmd_parms *cmd, void *dconf, const char *arg)
         if (APR_SUCCESS != stat)
             return apr_psprintf(cmd->pool, "Can't open empty file %s, loaded from %s: %pm", 
                 efname, arg, stat);
-        c->empty = (apr_uint32_t *) apr_palloc(cmd->pool, c->esize);
+        c->empty = (apr_uint32_t *) apr_palloc(cmd->pool, static_cast<apr_size_t>(c->esize));
         stat = apr_file_seek(efile, APR_SET, &offset);
         if (APR_SUCCESS != stat)
             return apr_psprintf(cmd->pool, "Can't seek empty tile %s: %pm", efname, stat);
@@ -372,7 +372,7 @@ static int send_empty_tile(request_rec *r) {
     }
 
     if (!cfg->empty) return DECLINED;
-    return send_image(r, cfg->empty, cfg->esize);
+    return send_image(r, cfg->empty, static_cast<apr_size_t>(cfg->esize));
 }
 
 // For now just open the file for reading
@@ -479,7 +479,8 @@ static int handler(request_rec *r)
     if (!cfg->datafname && !cfg->redirect)
         SERR_IF(true, apr_psprintf(r->pool, "No data file configured for %s", r->uri));
 
-    apr_uint32_t *buffer = (apr_uint32_t *)apr_palloc(r->pool, index.size);
+    apr_uint32_t *buffer = static_cast<apr_uint32_t *>(
+        apr_palloc(r->pool, static_cast<apr_size_t>(index.size)));
 
     if (cfg->redirect) {
         // TODO: S3 authorized requests
@@ -488,8 +489,8 @@ static int handler(request_rec *r)
 
         // Get a buffer for the received image
         receive_ctx rctx;
-        rctx.buffer = (char *)buffer;
-        rctx.maxsize = index.size;
+        rctx.buffer = reinterpret_cast<char *>(buffer);
+        rctx.maxsize = static_cast<int>(index.size);
         rctx.size = 0;
 
         ap_filter_t *rf = ap_add_output_filter_handle(receive_filter, &rctx, r, r->connection);
@@ -518,14 +519,14 @@ static int handler(request_rec *r)
             "Memory allocation error in mod_mrf");
         SERR_IF(apr_file_seek(dataf, APR_SET, (apr_off_t *)&index.offset),
             apr_psprintf(r->pool, "Seek error in %s", cfg->datafname));
-        read_size = index.size;
+        read_size = static_cast<apr_size_t>(index.size);
         SERR_IF(apr_file_read(dataf, buffer, &read_size) || read_size != index.size,
             apr_psprintf(r->pool, "Can't read from %s", cfg->datafname));
     }
 
     // Looks fine, set the outgoing etag and then the image
     apr_table_setn(r->headers_out, "ETag", ETag);
-    return send_image(r, buffer, index.size);
+    return send_image(r, buffer, static_cast<apr_size_t>(index.size));
 }
 
 static const command_rec mrf_cmds[] =
