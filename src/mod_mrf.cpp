@@ -123,7 +123,7 @@ static void mrf_init(apr_pool_t *p, mrf_conf *c) {
     level.height = static_cast<int>(1 + (c->size.y - 1) / c->pagesize.y);
     level.offset = 0;
     // How many levels do we have
-    c->n_levels = 2 + ilogb(max(level.height, level.width) -1);
+    c->n_levels = 2 + ilogb(max(level.height, level.width) - 1);
     c->rsets = (struct rset *)apr_pcalloc(p, sizeof(rset) * c->n_levels);
 
     // Populate rsets from the bottom, the way tile protcols count levels
@@ -170,37 +170,37 @@ static const char *set_regexp(cmd_parms *cmd, mrf_conf *c, const char *pattern)
 
  Supported keys:
 
-  Size X Y <Z> <C>
-  Mandatory, the size in pixels of the input MRF.  Z defaults to 1 and C defaults to 3 (usually not meaningful)
+ Size X Y <Z> <C>
+ Mandatory, the size in pixels of the input MRF.  Z defaults to 1 and C defaults to 3 (usually not meaningful)
 
-  PageSize X Y <1> <C>
-  Optional, the pagesize in pixels.  X and Y default to 512. Z has to be 1 if C is provided, which has to match the C value from size
+ PageSize X Y <1> <C>
+ Optional, the pagesize in pixels.  X and Y default to 512. Z has to be 1 if C is provided, which has to match the C value from size
 
-  DataFile string
-  Mandatory, the data file of the MRF.
-  
-  IndexFile string
-  Optional, The index file name.
-  If not provided it uses the data file name if its extension is not three letters.  
-  Otherwise it uses the datafile name with the extension changed to .idx
- 
-  MimeType string
-  Optional.  Defaults to autodetect
+ DataFile string
+ Mandatory, the data file of the MRF.
 
-  EmptyTile <Size> <Offset> <FileName>
-  Optional.  By default it ignores the request if a tile is missing
-  First number is assumed to be the size, second is offset
-  If filename is not provided, it uses the data file name
+ IndexFile string
+ Optional, The index file name.
+ If not provided it uses the data file name if its extension is not three letters.
+ Otherwise it uses the datafile name with the extension changed to .idx
 
-  SkippedLevels <N>
-  Optional, how many levels to ignore, at the top of the MRF pyramid
-  For example a GCS pyramid will have to skip the one tile level, so this should be 1
- 
-  ETagSeed base32_string
-  Optional, 64 bits in base32 digits.  Defaults to 0
-  The empty tile ETag will be this value but bit 64 (65th bit) is set. All the other tiles
-  have ETags that depend on this one and bit 64 is zero
-*/
+ MimeType string
+ Optional.  Defaults to autodetect
+
+ EmptyTile <Size> <Offset> <FileName>
+ Optional.  By default it ignores the request if a tile is missing
+ First number is assumed to be the size, second is offset
+ If filename is not provided, it uses the data file name
+
+ SkippedLevels <N>
+ Optional, how many levels to ignore, at the top of the MRF pyramid
+ For example a GCS pyramid will have to skip the one tile level, so this should be 1
+
+ ETagSeed base32_string
+ Optional, 64 bits in base32 digits.  Defaults to 0
+ The empty tile ETag will be this value but bit 64 (65th bit) is set. All the other tiles
+ have ETags that depend on this one and bit 64 is zero
+ */
 
 static const char *mrf_file_set(cmd_parms *cmd, void *dconf, const char *arg)
 {
@@ -243,7 +243,7 @@ static const char *mrf_file_set(cmd_parms *cmd, void *dconf, const char *arg)
     // Data and index in the same location by default
     if (line) { // If the data file has a three letter extension, change it to idx for the index
         c->datafname = apr_pstrdup(cmd->pool, line);
-        c->idxfname  = apr_pstrdup(cmd->pool, line);
+        c->idxfname = apr_pstrdup(cmd->pool, line);
         char *last;
         char *token = apr_strtok(c->idxfname, ".", &last); // strtok destroys the idxfile
         while (*last != 0 && token != NULL)
@@ -271,7 +271,7 @@ static const char *mrf_file_set(cmd_parms *cmd, void *dconf, const char *arg)
     // If an emtpy tile is not provided, it falls through
     // If provided, it has an optional size and offset followed by file name which defaults to datafile
     // read the empty tile
-   const char *efname = c->datafname; // Default file name is data file
+    const char *efname = c->datafname; // Default file name is data file
     line = apr_table_get(kvp, "EmptyTile");
     if (line) {
         char *last;
@@ -292,8 +292,9 @@ static const char *mrf_file_set(cmd_parms *cmd, void *dconf, const char *arg)
     if (line)
         c->redirect = apr_pstrdup(cmd->pool, line);
 
-    // If we're provided a file name or a size, pre-read the empty tile in the 
-    if (c->datafname && (apr_strnatcmp(efname, c->datafname) || c->esize)) {
+    // If we're provided a file name or a size, pre-read the empty tile in the
+    if (efname && (c->datafname == NULL || apr_strnatcmp(c->datafname, efname) || c->esize))
+    {
         apr_file_t *efile;
         apr_off_t offset = c->eoffset;
         apr_status_t stat;
@@ -306,11 +307,12 @@ static const char *mrf_file_set(cmd_parms *cmd, void *dconf, const char *arg)
                 return apr_psprintf(cmd->pool, "Can't stat %s %pm", efname, stat);
             c->esize = (apr_uint64_t)finfo.csize;
         }
+
         stat = apr_file_open(&efile, efname, APR_FOPEN_READ | APR_FOPEN_BINARY, 0, cmd->temp_pool);
         if (APR_SUCCESS != stat)
-            return apr_psprintf(cmd->pool, "Can't open empty file %s, loaded from %s: %pm", 
-                efname, arg, stat);
-        c->empty = (apr_uint32_t *) apr_palloc(cmd->pool, static_cast<apr_size_t>(c->esize));
+            return apr_psprintf(cmd->pool, "Can't open empty file %s, loaded from %s: %pm",
+            efname, arg, stat);
+        c->empty = (apr_uint32_t *)apr_palloc(cmd->pool, static_cast<apr_size_t>(c->esize));
         stat = apr_file_seek(efile, APR_SET, &offset);
         if (APR_SUCCESS != stat)
             return apr_psprintf(cmd->pool, "Can't seek empty tile %s: %pm", efname, stat);
@@ -318,7 +320,7 @@ static const char *mrf_file_set(cmd_parms *cmd, void *dconf, const char *arg)
         stat = apr_file_read(efile, c->empty, &size);
         if (APR_SUCCESS != stat)
             return apr_psprintf(cmd->pool, "Can't read from %s, loaded from %s: %pm",
-                efname, arg, stat);
+            efname, arg, stat);
         apr_file_close(efile);
     }
 
@@ -378,7 +380,7 @@ static int send_empty_tile(request_rec *r) {
 // For now just open the file for reading
 apr_status_t open_file(request_rec *r, apr_file_t **pfh, const char *name)
 {
-    return apr_file_open(pfh, name, 
+    return apr_file_open(pfh, name,
         APR_FOPEN_READ | APR_FOPEN_BINARY | APR_FOPEN_LARGEFILE, NULL, r->pool);
 }
 
@@ -447,7 +449,7 @@ static int handler(request_rec *r)
     apr_file_t *idxf, *dataf;
     SERR_IF(open_file(r, &idxf, cfg->idxfname),
         apr_psprintf(r->pool, "Can't open %s", cfg->idxfname));
-    SERR_IF(apr_file_seek(idxf, APR_SET, &tidx_offset), 
+    SERR_IF(apr_file_seek(idxf, APR_SET, &tidx_offset),
         apr_psprintf(r->pool, "Tile doesn't exist in %s", cfg->datafname));
     TIdx index;
     apr_size_t read_size = sizeof(index);
@@ -532,19 +534,19 @@ static int handler(request_rec *r)
 static const command_rec mrf_cmds[] =
 {
     AP_INIT_FLAG(
-        "MRF",
-        CMD_FUNC ap_set_flag_slot,
-        (void *)APR_OFFSETOF(mrf_conf, enabled),
-        ACCESS_CONF,
-        "mod_mrf enable, defaults to on if configuration is provided"
+    "MRF",
+    CMD_FUNC ap_set_flag_slot,
+    (void *)APR_OFFSETOF(mrf_conf, enabled),
+    ACCESS_CONF,
+    "mod_mrf enable, defaults to on if configuration is provided"
     ),
 
     AP_INIT_TAKE1(
-        "MRF_ConfigurationFile",
-        CMD_FUNC mrf_file_set, // Callback
-        0, // Self-pass argument
-        ACCESS_CONF, // availability
-        "The configuration file for this module"
+    "MRF_ConfigurationFile",
+    CMD_FUNC mrf_file_set, // Callback
+    0, // Self-pass argument
+    ACCESS_CONF, // availability
+    "The configuration file for this module"
     ),
 
     AP_INIT_TAKE1(
@@ -552,7 +554,8 @@ static const command_rec mrf_cmds[] =
     (cmd_func)set_regexp,
     0, // Self-pass argument
     ACCESS_CONF, // availability
-    "Regular expression that the URL has to match.  At least one is required."),
+    "Regular expression that the URL has to match.  At least one is required."
+    ),
 
     { NULL }
 };
@@ -569,12 +572,12 @@ static void mrf_register_hooks(apr_pool_t *p)
 
 {
     ap_hook_handler(handler, NULL, NULL, APR_HOOK_FIRST);
-//    ap_hook_check_config(check_config, NULL, NULL, APR_HOOK_MIDDLE);
+    //    ap_hook_check_config(check_config, NULL, NULL, APR_HOOK_MIDDLE);
 }
 
 module AP_MODULE_DECLARE_DATA mrf_module = {
     STANDARD20_MODULE_STUFF,
-    create_dir_config, 
+    create_dir_config,
     0, // No dir_merge
     0, // No server_config
     0, // No server_merge
