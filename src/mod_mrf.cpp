@@ -382,6 +382,11 @@ apr_status_t open_file(request_rec *r, apr_file_t **pfh, const char *name)
 {
     return apr_file_open(pfh, name,
         APR_FOPEN_READ | APR_FOPEN_BINARY | APR_FOPEN_LARGEFILE, NULL, r->pool);
+#if !defined(WIN32)
+    apr_os_file_t fd;
+    if (APR_SUCCESS == apr_os_file_get(&fd, *pfh))
+        posix_fadvise(static_cast<int>(fd), 0, 0, POSIX_FADV_RANDOM);
+#endif
 }
 
 #define REQ_ERR_IF(X) if (X) {\
