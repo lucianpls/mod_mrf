@@ -50,3 +50,7 @@ This module takes two apache configuration directives:
  
   **Redirect path**
   - Optional, if the data file is on an object store
+
+For better performance on local files, the httpd source against which this module is compiled should include support for random file access optimization. A patch file for libapr is provided, see apr_FOPEN_RANDOM.patch
+
+For better performance when using object stores, the mod_proxy should be patched to reuse connections on subrequests.  A patch file is included, see mod_proxy_httpd.patch

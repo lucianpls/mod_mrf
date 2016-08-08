@@ -378,14 +378,24 @@ static int send_empty_tile(request_rec *r) {
 }
 
 // For now just open the file for reading
-apr_status_t open_file(request_rec *r, apr_file_t **pfh, const char *name)
+static apr_status_t open_file(request_rec *r, apr_file_t **pfh, const char *name)
 {
-    return apr_file_open(pfh, name,
-        APR_FOPEN_READ | APR_FOPEN_BINARY | APR_FOPEN_LARGEFILE, NULL, r->pool);
-#if !defined(WIN32)
+    static const apr_int32_t flags = APR_FOPEN_READ | APR_FOPEN_BINARY | APR_FOPEN_LARGEFILE;
+
+#if defined(APR_FOPEN_RANDOM)
+    // apr has portable support for random access to files
+    return apr_file_open(pfh, name, flags | APR_FOPEN_RANDOM, NULL, r->pool);
+
+#else
+
+    apr_status_t stat = apr_file_open(pfh, name, flags, NULL, r->pool);
+#if defined(POSIX_FADV_RANDOM) // Optimize random access explicitly
     apr_os_file_t fd;
     if (APR_SUCCESS == apr_os_file_get(&fd, *pfh))
         posix_fadvise(static_cast<int>(fd), 0, 0, POSIX_FADV_RANDOM);
+#endif
+    return stat;
+
 #endif
 }
 
