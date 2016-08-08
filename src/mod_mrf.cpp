@@ -377,18 +377,18 @@ static int send_empty_tile(request_rec *r) {
     return send_image(r, cfg->empty, static_cast<apr_size_t>(cfg->esize));
 }
 
-// For now just open the file for reading
+// Open file optimized for random access
 static apr_status_t open_file(request_rec *r, apr_file_t **pfh, const char *name)
 {
     static const apr_int32_t flags = APR_FOPEN_READ | APR_FOPEN_BINARY | APR_FOPEN_LARGEFILE;
 
 #if defined(APR_FOPEN_RANDOM)
     // apr has portable support for random access to files
-    return apr_file_open(pfh, name, flags | APR_FOPEN_RANDOM, NULL, r->pool);
+    return apr_file_open(pfh, name, flags | APR_FOPEN_RANDOM, 0, r->pool);
 
 #else
 
-    apr_status_t stat = apr_file_open(pfh, name, flags, NULL, r->pool);
+    apr_status_t stat = apr_file_open(pfh, name, flags, 0, r->pool);
 #if defined(POSIX_FADV_RANDOM) // Optimize random access explicitly
     apr_os_file_t fd;
     if (APR_SUCCESS == apr_os_file_get(&fd, *pfh))
@@ -520,7 +520,8 @@ static int handler(request_rec *r)
         int status = ap_run_sub_req(sr);
         ap_remove_output_filter(rf);
 
-        if (status != APR_SUCCESS || sr->status != HTTP_PARTIAL_CONTENT || rctx.size != index.size) {
+        if (status != APR_SUCCESS || sr->status != HTTP_PARTIAL_CONTENT 
+            || rctx.size != static_cast<int>(index.size)) {
             ap_log_rerror(APLOG_MARK, APLOG_ERR, 0, r, "Can't fetch data from %s", cfg->redirect);
             return HTTP_SERVICE_UNAVAILABLE;
         }
@@ -577,11 +578,11 @@ static const command_rec mrf_cmds[] =
 
 
 // Return OK or DECLINED, anything else is error
-static int check_config(apr_pool_t *pconf, apr_pool_t *plog, apr_pool_t *ptemp, server_rec *server)
-{
-    return DECLINED;
+//static int check_config(apr_pool_t *pconf, apr_pool_t *plog, apr_pool_t *ptemp, server_rec *server)
+//{
+//    return DECLINED;
     // This gets called once for the whole server, it would have to check the configuration for every folder
-}
+//}
 
 static void mrf_register_hooks(apr_pool_t *p)
 
