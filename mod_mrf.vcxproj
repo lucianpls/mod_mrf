@@ -17,6 +17,7 @@
     <ClInclude Include="src\mod_mrf.h" />
   </ItemGroup>
   <ItemGroup>
+    <None Include="apr_FOPEN_RANDOM.patch" />
     <None Include="README.md" />
   </ItemGroup>
   <PropertyGroup Label="Globals">

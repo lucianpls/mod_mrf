@@ -22,6 +22,9 @@
     <None Include="README.md">
       <Filter>DOC</Filter>
     </None>
+    <None Include="apr_FOPEN_RANDOM.patch">
+      <Filter>DOC</Filter>
+    </None>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="src\mod_mrf.cpp">

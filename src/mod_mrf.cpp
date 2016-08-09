@@ -377,25 +377,73 @@ static int send_empty_tile(request_rec *r) {
     return send_image(r, cfg->empty, static_cast<apr_size_t>(cfg->esize));
 }
 
-// Open file optimized for random access
-static apr_status_t open_file(request_rec *r, apr_file_t **pfh, const char *name)
+static const apr_int32_t open_flags = APR_FOPEN_READ | APR_FOPEN_BINARY | APR_FOPEN_LARGEFILE;
+
+struct file_note {
+    const char *name;
+    apr_file_t *pfh;
+};
+
+/*
+ * Open or retrieve an connection cached file
+ */
+static apr_status_t open_connection_file(request_rec *r, apr_file_t **ppfh, const char *name,
+    apr_int32_t flags = open_flags, const char *note_name = "MRF_INDEX_FILE")
+
 {
-    static const apr_int32_t flags = APR_FOPEN_READ | APR_FOPEN_BINARY | APR_FOPEN_LARGEFILE;
+    apr_table_t *conn_notes = r->connection->notes;
+
+    // Try to pick it up from the connection notes
+    file_note *fn = (file_note *) apr_table_get(conn_notes, note_name);
+    if ((fn != NULL) && !apr_strnatcmp(name, fn->name)) { // Match, set file and return
+        *ppfh = fn->pfh;
+        return APR_SUCCESS;
+    }
+
+    // Use the connection pool for the note and file, to ensure it gets closed with the connection
+    apr_pool_t *pool = r->connection->pool;
+
+    if (fn != NULL) { // We have an file note but it is not the right file
+        apr_table_unset(conn_notes, note_name); // Unhook the existing note
+        apr_file_close(fn->pfh); // Close the existing file
+    }
+    else { // no previous note, allocate a clean one
+        fn = (file_note *)apr_palloc(pool, sizeof(file_note));
+    }
+
+    apr_status_t stat = apr_file_open(ppfh, name, open_flags, 0, pool);
+    if (stat != APR_SUCCESS) 
+        return stat;
+
+    // Fill the note and hook it up, then return
+    fn->pfh = *ppfh;
+    fn->name = apr_pstrdup(pool, name); // The old string will persist until cleaned by the pool
+    apr_table_setn(conn_notes, note_name, (const char *) fn);
+    return APR_SUCCESS;
+}
+
+#define open_index_file open_connection_file
+
+// Open data file optimized for random access if possible
+static apr_status_t open_data_file(request_rec *r, apr_file_t **ppfh, const char *name)
+{
+    static const char data_note_name[] = "MRF_DATA_FILE";
 
 #if defined(APR_FOPEN_RANDOM)
     // apr has portable support for random access to files
-    return apr_file_open(pfh, name, flags | APR_FOPEN_RANDOM, 0, r->pool);
+    return open_connection_file(r, ppfh, name, open_flags | APR_FOPEN_RANDOM, data_note_name);
+#endif
 
-#else
+    apr_status_t stat = open_connection_file(r, ppfh, name, open_flags, data_note_name);
 
-    apr_status_t stat = apr_file_open(pfh, name, flags, 0, r->pool);
-#if defined(POSIX_FADV_RANDOM) // Optimize random access explicitly
+#if !defined(POSIX_FADV_RANDOM)
+    return stat;
+
+#else // last chance, turn random flag on if supported
     apr_os_file_t fd;
     if (APR_SUCCESS == apr_os_file_get(&fd, *pfh))
         posix_fadvise(static_cast<int>(fd), 0, 0, POSIX_FADV_RANDOM);
-#endif
     return stat;
-
 #endif
 }
 
@@ -462,7 +510,7 @@ static int handler(request_rec *r)
         sizeof(TIdx) * (tile.x + level->width * (tile.z * level->height + tile.y));
 
     apr_file_t *idxf, *dataf;
-    SERR_IF(open_file(r, &idxf, cfg->idxfname),
+    SERR_IF(open_index_file(r, &idxf, cfg->idxfname),
         apr_psprintf(r->pool, "Can't open %s", cfg->idxfname));
     SERR_IF(apr_file_seek(idxf, APR_SET, &tidx_offset),
         apr_psprintf(r->pool, "Tile doesn't exist in %s", cfg->datafname));
@@ -529,7 +577,7 @@ static int handler(request_rec *r)
     }
     else
     { // Read from a local file
-        SERR_IF(open_file(r, &dataf, cfg->datafname),
+        SERR_IF(open_data_file(r, &dataf, cfg->datafname),
             apr_psprintf(r->pool, "Can't open %s", cfg->datafname));
 
         // We got the tile index, and is not empty
