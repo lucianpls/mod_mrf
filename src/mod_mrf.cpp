@@ -377,15 +377,16 @@ static int send_empty_tile(request_rec *r) {
     return send_image(r, cfg->empty, static_cast<apr_size_t>(cfg->esize));
 }
 
-static const apr_int32_t open_flags = APR_FOPEN_READ | APR_FOPEN_BINARY | APR_FOPEN_LARGEFILE;
-
+// An open file handle and the matching file name, to be used as a note
 struct file_note {
     const char *name;
     apr_file_t *pfh;
 };
 
+static const apr_int32_t open_flags = APR_FOPEN_READ | APR_FOPEN_BINARY | APR_FOPEN_LARGEFILE;
+
 /*
- * Open or retrieve an connection cached file
+ * Open or retrieve an connection cached file.
  */
 static apr_status_t open_connection_file(request_rec *r, apr_file_t **ppfh, const char *name,
     apr_int32_t flags = open_flags, const char *note_name = "MRF_INDEX_FILE")
@@ -411,7 +412,7 @@ static apr_status_t open_connection_file(request_rec *r, apr_file_t **ppfh, cons
         fn = (file_note *)apr_palloc(pool, sizeof(file_note));
     }
 
-    apr_status_t stat = apr_file_open(ppfh, name, open_flags, 0, pool);
+    apr_status_t stat = apr_file_open(ppfh, name, flags, 0, pool);
     if (stat != APR_SUCCESS) 
         return stat;
 
