@@ -432,7 +432,7 @@ static apr_status_t open_data_file(request_rec *r, apr_file_t **ppfh, const char
 #if defined(APR_FOPEN_RANDOM)
     // apr has portable support for random access to files
     return open_connection_file(r, ppfh, name, open_flags | APR_FOPEN_RANDOM, data_note_name);
-#endif
+#else
 
     apr_status_t stat = open_connection_file(r, ppfh, name, open_flags, data_note_name);
 
@@ -441,10 +441,11 @@ static apr_status_t open_data_file(request_rec *r, apr_file_t **ppfh, const char
 
 #else // last chance, turn random flag on if supported
     apr_os_file_t fd;
-    if (APR_SUCCESS == apr_os_file_get(&fd, *pfh))
+    if (APR_SUCCESS == apr_os_file_get(&fd, *ppfh))
         posix_fadvise(static_cast<int>(fd), 0, 0, POSIX_FADV_RANDOM);
     return stat;
 #endif
+#endif // APR_FOPEN_RANDOM
 }
 
 #define REQ_ERR_IF(X) if (X) {\
