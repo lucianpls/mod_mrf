@@ -91,14 +91,17 @@ static void uint64tobase32(apr_uint64_t value, char *buffer, int flag = 0) {
     static char b32digits[] = "0123456789abcdefghijklmnopqrstuv";
     // From the bottom up
     buffer[13] = 0; // End of string marker
-    for (int i = 0; i < 13; i++, value >>= 5)
+    for (int i = 0; i < 12; i++, value >>= 5)
         buffer[12 - i] = b32digits[value & 0x1f];
-    buffer[0] |= flag << 4; // empty flag goes in top bit
+    // First char holds the empty tile flag
+    if (flag) flag = 0x10; // Making sure it has the right value
+    buffer[0] = b32digits[flag | value];
 }
 
 // Return the value from a base 32 character
 // Returns a negative value if char is not a valid base32 char
-static int b32(unsigned char c) {
+static int b32(char ic) {
+    int c = 0xff & (static_cast<int>(ic));
     if (c < '0') return -1;
     if (c - '0' < 10) return c - '0';
     if (c < 'A') return -1;
@@ -108,8 +111,9 @@ static int b32(unsigned char c) {
     return -1;
 }
 
-static apr_uint64_t base32decode(unsigned char *s, int *flag) {
+static apr_uint64_t base32decode(const char *is, int *flag) {
     apr_int64_t value = 0;
+    const unsigned char *s = reinterpret_cast<const unsigned char *>(is);
     while (*s == '"') s++; // Skip initial quotes
     *flag = (b32(*s) >> 4) & 1; // Pick up the flag from bit 5
     for (int v = b32(*s++) & 0xf; v >= 0; v = b32(*s++))
@@ -327,7 +331,7 @@ static const char *mrf_file_set(cmd_parms *cmd, void *dconf, const char *arg)
     line = apr_table_get(kvp, "ETagSeed");
     // Ignore the flag
     int flag;
-    c->seed = line ? base32decode((unsigned char *)line, &flag) : 0;
+    c->seed = line ? base32decode(line, &flag) : 0;
     // Set the missing tile etag, with the extra bit set
     uint64tobase32(c->seed, c->eETag, 1);
     c->enabled = 1;
@@ -373,7 +377,7 @@ static int send_empty_tile(request_rec *r) {
         return HTTP_NOT_MODIFIED;
     }
 
-    if (!cfg->empty) return DECLINED;
+    if (!cfg->empty) return DECLINED; // Passthrough
     return send_image(r, cfg->empty, static_cast<apr_size_t>(cfg->esize));
 }
 
@@ -514,12 +518,13 @@ static int handler(request_rec *r)
     apr_file_t *idxf, *dataf;
     SERR_IF(open_index_file(r, &idxf, cfg->idxfname),
         apr_psprintf(r->pool, "Can't open %s", cfg->idxfname));
-    SERR_IF(apr_file_seek(idxf, APR_SET, &tidx_offset),
-        apr_psprintf(r->pool, "Tile doesn't exist in %s", cfg->datafname));
     TIdx index;
-    apr_size_t read_size = sizeof(index);
-    SERR_IF(apr_file_read(idxf, &index, &read_size) || read_size != sizeof(index),
-        apr_psprintf(r->pool, "Tile doesn't exist in %s", cfg->datafname));
+    apr_size_t read_size = sizeof(TIdx);
+
+    SERR_IF(apr_file_seek(idxf, APR_SET, &tidx_offset) 
+        || apr_file_read(idxf, &index, &read_size) 
+        || read_size != sizeof(TIdx),
+        apr_psprintf(r->pool, "Tile index doesn't exist in %s", cfg->idxfname));
 
     // MRF index record is in network order
     index.size = ntoh64(index.size);
@@ -534,11 +539,11 @@ static int handler(request_rec *r)
     }
 
     // Check for conditional ETag here, no need to open the data file
-    char *ETag = (char *)apr_palloc(r->pool, 16);
+    char ETag[16];
     // Try to distribute the bits a bit to generate an ETag
     uint64tobase32(cfg->seed ^ (index.size << 40) ^ index.offset, ETag);
     if (etag_matches(r, ETag)) {
-        apr_table_setn(r->headers_out, "ETag", ETag);
+        apr_table_set(r->headers_out, "ETag", ETag);
         return HTTP_NOT_MODIFIED;
     }
 
@@ -593,7 +598,7 @@ static int handler(request_rec *r)
     }
 
     // Looks fine, set the outgoing etag and then the image
-    apr_table_setn(r->headers_out, "ETag", ETag);
+    apr_table_set(r->headers_out, "ETag", ETag);
     return send_image(r, buffer, static_cast<apr_size_t>(index.size));
 }
 
