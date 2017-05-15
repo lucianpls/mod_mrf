@@ -149,17 +149,11 @@ static void mrf_init(apr_pool_t *p, mrf_conf *c) {
 static const char *set_regexp(cmd_parms *cmd, mrf_conf *c, const char *pattern)
 {
     char *err_message = NULL;
-    if (c->regexp == 0)
-        c->regexp = apr_array_make(cmd->pool, 2, sizeof(ap_regex_t));
-    ap_regex_t *m = (ap_regex_t *)apr_array_push(c->regexp);
-    int error = ap_regcomp(m, pattern, 0);
-    if (error) {
-        int msize = 2048;
-        err_message = (char *)apr_pcalloc(cmd->pool, msize);
-        ap_regerror(error, m, err_message, msize);
-        return apr_pstrcat(cmd->pool, "MRF Regexp incorrect ", err_message, NULL);
-    }
-    return NULL;
+    if (c->arr_rxp == 0)
+        c->arr_rxp = apr_array_make(cmd->pool, 2, sizeof(ap_regex_t *));
+    ap_regex_t **m = (ap_regex_t **)apr_array_push(c->arr_rxp);
+    *m = ap_pregcomp(cmd->pool, pattern, 0);
+    return (NULL != *m) ? NULL : "Bad regular expression";
 }
 
 /*
@@ -199,6 +193,9 @@ static const char *set_regexp(cmd_parms *cmd, mrf_conf *c, const char *pattern)
  SkippedLevels <N>
  Optional, how many levels to ignore, at the top of the MRF pyramid
  For example a GCS pyramid will have to skip the one tile level, so this should be 1
+
+ Redirect
+ Instead of reading from the data file, make range requests to this URI
 
  ETagSeed base32_string
  Optional, 64 bits in base32 digits.  Defaults to 0
@@ -462,26 +459,26 @@ static apr_status_t open_data_file(request_rec *r, apr_file_t **ppfh, const char
     return HTTP_INTERNAL_SERVER_ERROR; \
 }
 
+static bool our_request(request_rec *r, mrf_conf *cfg) {
+    if (r->method_number != M_GET || cfg->arr_rxp == NULL)
+        return false;
+
+    char *url_to_match = r->args ? apr_pstrcat(r->pool, r->uri, "?", r->args, NULL) : r->uri;
+    for (int i = 0; i < cfg->arr_rxp->nelts; i++) {
+        ap_regex_t *m = APR_ARRAY_IDX(cfg->arr_rxp, i, ap_regex_t *);
+        if (!ap_regexec(m, url_to_match, 0, NULL, 0)) return true; // Found
+    }
+    return false;
+}
+
+
 static int handler(request_rec *r)
 {
     // Only get and no arguments
-    if (r->method_number != M_GET) return DECLINED;
     if (r->args) return DECLINED; // Don't accept arguments
 
     mrf_conf *cfg = (mrf_conf *)ap_get_module_config(r->per_dir_config, &mrf_module);
-    if (!cfg->enabled) return DECLINED; // Not enabled
-
-    if (cfg->regexp) { // Check the guard regexps if they exist, matches agains URL
-        int i;
-        char * url_to_match = r->args ? apr_pstrcat(r->pool, r->uri, "?", r->args, NULL) : r->uri;
-        for (i = 0; i < cfg->regexp->nelts; i++) {
-            ap_regex_t *m = &APR_ARRAY_IDX(cfg->regexp, i, ap_regex_t);
-            if (ap_regexec(m, url_to_match, 0, NULL, 0)) continue; // Not matched
-            break;
-        }
-        if (i == cfg->regexp->nelts) // No match found
-            return DECLINED;
-    }
+    if (!cfg->enabled || !our_request(r, cfg)) return DECLINED;
 
     apr_array_header_t *tokens = tokenize(r->pool, r->uri, '/');
     if (tokens->nelts < 3) return DECLINED; // At least Level Row Column
