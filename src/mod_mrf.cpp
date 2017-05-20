@@ -1,7 +1,7 @@
 /*
 * An OnEarth module that serves tiles from an MRF
 * Lucian Plesea
-* (C) 2016
+* (C) 2016-2017
 */
 
 #include "mod_mrf.h"
@@ -450,12 +450,14 @@ static apr_status_t open_data_file(request_rec *r, apr_file_t **ppfh, const char
 #endif // APR_FOPEN_RANDOM
 }
 
+// Quiet error
 #define REQ_ERR_IF(X) if (X) {\
     return HTTP_BAD_REQUEST; \
 }
 
+// Logged error
 #define SERR_IF(X, msg) if (X) { \
-    ap_log_error(APLOG_MARK, APLOG_ERR, 0, r->server, msg);\
+    ap_log_rerror(APLOG_MARK, APLOG_ERR, 0, r, "%s", msg);\
     return HTTP_INTERNAL_SERVER_ERROR; \
 }
 
@@ -504,7 +506,7 @@ static int handler(request_rec *r)
 
     tile.l += cfg->skip_levels;
     // Check for bad requests, outside of the defined bounds
-    REQ_ERR_IF(tile.l > cfg->n_levels);
+    REQ_ERR_IF(tile.l >= cfg->n_levels);
     rset *level = cfg->rsets + tile.l;
     REQ_ERR_IF(tile.x >= level->width || tile.y >= level->height);
 
