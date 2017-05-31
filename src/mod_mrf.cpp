@@ -342,7 +342,9 @@ static int etag_matches(request_rec *r, const char *ETag) {
 
 static int send_image(request_rec *r, apr_uint32_t *buffer, apr_size_t size)
 {
-    mrf_conf *cfg = (mrf_conf *)ap_get_module_config(r->per_dir_config, &mrf_module);
+    mrf_conf *cfg = (mrf_conf *)ap_get_module_config(r->request_config, &mrf_module)
+        ? (mrf_conf *)ap_get_module_config(r->request_config, &mrf_module)
+        : (mrf_conf *)ap_get_module_config(r->per_dir_config, &mrf_module);
     if (cfg->mime_type)
         ap_set_content_type(r, cfg->mime_type);
     else
@@ -368,7 +370,9 @@ static int send_image(request_rec *r, apr_uint32_t *buffer, apr_size_t size)
 
 // Returns the empty tile if defined
 static int send_empty_tile(request_rec *r) {
-    mrf_conf *cfg = (mrf_conf *)ap_get_module_config(r->per_dir_config, &mrf_module);
+    mrf_conf *cfg = (mrf_conf *)ap_get_module_config(r->request_config, &mrf_module)
+        ? (mrf_conf *)ap_get_module_config(r->request_config, &mrf_module)
+        : (mrf_conf *)ap_get_module_config(r->per_dir_config, &mrf_module);
     if (etag_matches(r, cfg->eETag)) {
         apr_table_setn(r->headers_out, "ETag", cfg->eETag);
         return HTTP_NOT_MODIFIED;
@@ -479,7 +483,9 @@ static int handler(request_rec *r)
     // Only get and no arguments
     if (r->args) return DECLINED; // Don't accept arguments
 
-    mrf_conf *cfg = (mrf_conf *)ap_get_module_config(r->per_dir_config, &mrf_module);
+    mrf_conf *cfg = (mrf_conf *)ap_get_module_config(r->request_config, &mrf_module)
+        ? (mrf_conf *)ap_get_module_config(r->request_config, &mrf_module)
+        : (mrf_conf *)ap_get_module_config(r->per_dir_config, &mrf_module);
     if (!cfg->enabled || !our_request(r, cfg)) return DECLINED;
 
     apr_array_header_t *tokens = tokenize(r->pool, r->uri, '/');
