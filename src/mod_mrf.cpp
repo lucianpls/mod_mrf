@@ -364,7 +364,7 @@ static int send_image(request_rec *r, apr_uint32_t *buffer, apr_size_t size)
         apr_table_setn(r->headers_out, "Content-Encoding", "gzip");
         const char *ae = apr_table_get(r->headers_in, "Accept-Encoding");
         // If accept encoding is missing, assume it doesn't support gzip
-        if (!ae || strstr(ae, "gzip")) {
+        if (!ae || !strstr(ae, "gzip")) {
             ap_filter_rec_t *inflate_filter = ap_get_output_filter_handle("INFLATE");
             if (inflate_filter)
                 ap_add_output_filter_handle(inflate_filter, NULL, r, r->connection);
