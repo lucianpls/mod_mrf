@@ -358,11 +358,28 @@ static int send_image(request_rec *r, apr_uint32_t *buffer, apr_size_t size)
         default: // LERC goes here too
             ap_set_content_type(r, "application/octet-stream");
     }
-    // Is it gzipped content?
-    if (GZIP_SIG == hton32(*buffer))
-        apr_table_setn(r->headers_out, "Content-Encoding", "gzip");
 
-    // TODO: Set headers, as chosen by user
+    // Is it gzipped content?
+    if (GZIP_SIG == hton32(*buffer)) {
+        apr_table_setn(r->headers_out, "Content-Encoding", "gzip");
+        const char *ae = apr_table_get(r->headers_in, "Accept-Encoding");
+        // If accept encoding is missing, assume it doesn't support gzip
+        if (!ae || strstr(ae, "gzip")) {
+            ap_filter_rec_t *inflate_filter = ap_get_output_filter_handle("INFLATE");
+            if (inflate_filter)
+                ap_add_output_filter_handle(inflate_filter, NULL, r, r->connection);
+            else
+                ap_log_rerror(APLOG_MARK, APLOG_WARNING, 0, r,
+                    "mod_deflate not loaded, sending gzipped tile to client that does not declare support");
+        }
+    }
+
+    //
+    // Static headers can be added with the header module
+    // apr_table_setn(r->headers_out, "Access-Control-Allow-Origin", "*");
+    // apt_table_setn(r->headers_out, "Cache-Control", "max-age=86400");
+    //
+
     ap_set_content_length(r, size);
     ap_rwrite(buffer, size, r);
     return OK;

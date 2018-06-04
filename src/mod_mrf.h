@@ -31,7 +31,7 @@
 #define LERC_SIG 0x436e745a
 
 // This one is not a type, just an encoding
-#define GZIP_SIG 0x436e745a
+#define GZIP_SIG 0x1f8b0800
 
 // Conversion to and from network order, endianess depenent
 
