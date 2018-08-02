@@ -136,7 +136,10 @@ static void mrf_init(apr_pool_t *p, mrf_conf *c) {
     for (int i = 0; i < c->n_levels; i++) {
         *r-- = level;
         // Prepare for the next level, assuming powers of two
-        level.offset += sizeof(TIdx) * level.width * level.height * c->size.z;
+        // This is safe on all platforms that have large files (64bit signed offset)
+        // It will start failing if the file offset is larger than 63bits
+        // The c->size.z has to be first, to force the 64bit type
+        level.offset += c->size.z * level.width * level.height * sizeof(TIdx);
         level.width = 1 + (level.width - 1) / 2;
         level.height = 1 + (level.height - 1) / 2;
     }
