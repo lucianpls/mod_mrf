@@ -590,15 +590,17 @@ static int handler(request_rec *r)
         rctx.maxsize = static_cast<int>(index.size);
         rctx.size = 0;
 
-        ap_filter_t *rf = ap_add_output_filter_handle(receive_filter, &rctx, r, r->connection);
         request_rec *sr = ap_sub_req_lookup_uri(cfg->redirect, r, r->output_filters);
 
         // Data file is on a remote site a range request redirect with a range header
         static const char *rfmt = "bytes=%" APR_UINT64_T_FMT "-%" APR_UINT64_T_FMT;
         char *Range = apr_psprintf(r->pool, rfmt, index.offset, index.offset + index.size);
         apr_table_setn(sr->headers_in, "Range", Range);
+
+        ap_filter_t *rf = ap_add_output_filter_handle(receive_filter, &rctx, sr, sr->connection);
         int status = ap_run_sub_req(sr);
         ap_remove_output_filter(rf);
+        ap_destroy_sub_req(sr);
 
         if (status != APR_SUCCESS || sr->status != HTTP_PARTIAL_CONTENT 
             || rctx.size != static_cast<int>(index.size)) {
