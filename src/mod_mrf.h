@@ -20,6 +20,12 @@
 #define APR_WANT_MEMFUNC
 #include <apr_want.h>
 
+#if defined(DEBUG)
+#define LOG(r, frmt, ...) {\
+    ap_log_rerror(APLOG_MARK, APLOG_ERR, 0, r, frmt, ##__VA_ARGS__);\
+}
+#endif
+
 #define CMD_FUNC (cmd_func)
 
 // The maximum size of a tile, to avoid MRF corruption errors
