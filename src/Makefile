@@ -15,7 +15,7 @@ TARGET = .libs/mod_mrf.so
 # The options used here might depend on how apache was built
 $(TARGET)       :       $(FILES)
 	$(LIBTOOL) --silent --mode=compile g++ -prefer-pic -O2 -Wall $(DEFINES) $(INCLUDES) -pthread -c -o mod_mrf.lo $(C_SRC) && touch mod_mrf.slo
-	$(LIBTOOL) --silent --mode=link g++ -o mod_mrf.la -rpath $(MOD_PATH) -module -avoid-version mod_mrf.lo
+	$(LIBTOOL) --silent --mode=link g++ -o mod_mrf.la -rpath $(DEST) -module -avoid-version mod_mrf.lo
 
 install : $(TARGET)
 	$(SUDO) cp $(TARGET) $(DEST)
