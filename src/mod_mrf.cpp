@@ -16,6 +16,7 @@ static void *create_dir_config(apr_pool_t *p, char *dummy)
 {
     mrf_conf *c =
         (mrf_conf *)apr_pcalloc(p, sizeof(mrf_conf));
+    c->tries = 5;
     return c;
 }
 
@@ -293,8 +294,14 @@ static const char *mrf_file_set(cmd_parms *cmd, void *dconf, const char *arg)
     }
 
     line = apr_table_get(kvp, "Redirect");
-    if (line)
+    if (line) {
         c->redirect = apr_pstrdup(cmd->pool, line);
+        line = apr_table_get(kvp, "RetryCount");
+
+        c->tries = 1 + atoi(line);
+        if ((c->tries < 1) || (c->tries > 100))
+            return "Invalid RetryCount value, should be 0 to 99, defaults to 4";
+    }
 
     // If we're provided a file name or a size, pre-read the empty tile in the
     if (efname && (c->datafname == NULL || apr_strnatcmp(c->datafname, efname) || c->esize))
@@ -590,23 +597,31 @@ static int handler(request_rec *r)
         rctx.maxsize = static_cast<int>(index.size);
         rctx.size = 0;
 
-        request_rec *sr = ap_sub_req_lookup_uri(cfg->redirect, r, r->output_filters);
-
         // Data file is on a remote site a range request redirect with a range header
         static const char *rfmt = "bytes=%" APR_UINT64_T_FMT "-%" APR_UINT64_T_FMT;
         char *Range = apr_psprintf(r->pool, rfmt, index.offset, index.offset + index.size);
-        apr_table_setn(sr->headers_in, "Range", Range);
 
-        ap_filter_t *rf = ap_add_output_filter_handle(receive_filter, &rctx, sr, sr->connection);
-        int status = ap_run_sub_req(sr);
-        ap_remove_output_filter(rf);
-        ap_destroy_sub_req(sr);
+        // S3 may return less than requested, so we retry the request a couple of times
+        int tries = cfg->tries;
+        apr_time_t now = apr_time_now();
+        do {
+            request_rec *sr = ap_sub_req_lookup_uri(cfg->redirect, r, r->output_filters);
+            apr_table_setn(sr->headers_in, "Range", Range);
+            ap_filter_t *rf = ap_add_output_filter_handle(receive_filter, &rctx, sr, sr->connection);
+            int status = ap_run_sub_req(sr);
+            ap_remove_output_filter(rf);
+            ap_destroy_sub_req(sr);
 
-        if (status != APR_SUCCESS || sr->status != HTTP_PARTIAL_CONTENT 
-            || rctx.size != static_cast<int>(index.size)) {
-            ap_log_rerror(APLOG_MARK, APLOG_ERR, 0, r, "Can't fetch data from %s", cfg->redirect);
-            return HTTP_SERVICE_UNAVAILABLE;
-        }
+            if ((status != APR_SUCCESS || sr->status != HTTP_PARTIAL_CONTENT
+                || rctx.size != static_cast<int>(index.size))
+            && (0 == tries--))
+            { // Abort here
+                ap_log_rerror(APLOG_MARK, APLOG_ERR, 0, r, "Can't fetch data from %s, took us %" APR_TIME_T_FMT,
+                    cfg->redirect, apr_time_now() - now);
+                return HTTP_SERVICE_UNAVAILABLE;
+            }
+        } while (rctx.size != static_cast<int>(index.size));
+
         apr_table_clear(r->headers_out);
     }
     else
@@ -640,19 +655,19 @@ static const command_rec mrf_cmds[] =
     ),
 
     AP_INIT_TAKE1(
-    "MRF_ConfigurationFile",
-    CMD_FUNC mrf_file_set, // Callback
-    0, // Self-pass argument
-    ACCESS_CONF, // availability
-    "The configuration file for this module"
-    ),
-
-    AP_INIT_TAKE1(
     "MRF_RegExp",
     (cmd_func)set_regexp,
     0, // Self-pass argument
     ACCESS_CONF, // availability
     "Regular expression that the URL has to match.  At least one is required."
+    ),
+
+    AP_INIT_TAKE1(
+    "MRF_ConfigurationFile",
+    CMD_FUNC mrf_file_set, // Callback
+    0, // Self-pass argument
+    ACCESS_CONF, // availability
+    "The configuration file for this module"
     ),
 
     { NULL }
