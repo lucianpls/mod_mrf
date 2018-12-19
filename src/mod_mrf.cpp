@@ -342,6 +342,9 @@ static const char *mrf_file_set(cmd_parms *cmd, void *dconf, const char *arg)
     c->seed = line ? base32decode(line, &flag) : 0;
     // Set the missing tile etag, with the extra bit set
     uint64tobase32(c->seed, c->eETag, 1);
+    // check configuration sanity
+    if (!c->idxfname)
+        return apr_psprintf(cmd->pool, "MRF configuration %s an IndexFile directive", arg);
     c->enabled = 1;
     return NULL;
 }
@@ -550,7 +553,7 @@ static int handler(request_rec *r)
 
     apr_file_t *idxf, *dataf;
     SERR_IF(open_index_file(r, &idxf, cfg->idxfname),
-        apr_psprintf(r->pool, "Can't open %s", cfg->idxfname));
+        apr_psprintf(r->pool, "Can't open index %s", cfg->idxfname));
     TIdx index;
     apr_size_t read_size = sizeof(TIdx);
 
