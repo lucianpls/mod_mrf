@@ -1,7 +1,7 @@
 C_SRC = mod_mrf.cpp
 FILES = $(C_SRC)
 
-DEFINES = -DLINUX -D_REENTRANT -D_GNU_SOURCE
+DEFINES = -DLINUX -D_REENTRANT -D_GNU_SOURCE $(DEBUG)
 
 # Create the ../Makefile.lcl, which should define
 # DEST, the folder where the apache module should reside
