@@ -51,6 +51,9 @@ This module takes two apache configuration directives:
   **Redirect path**
   - Optional, if the data file is on an object store
 
+  **RetryCount N**
+  - Optional, if the Redirect is also set, how many times to retry retrieving data from the redirect path.  Defaults to 4, which means it will try 5 times.  Accepts values between 0 and 99.
+
 For better performance on local files, the httpd source against which this module is compiled should include support for random file access optimization. A patch file for libapr is provided, see apr_FOPEN_RANDOM.patch
 
 For better performance when using object stores, the mod_proxy should be patched to reuse connections on subrequests.  A patch file is included, see mod_proxy_httpd.patch

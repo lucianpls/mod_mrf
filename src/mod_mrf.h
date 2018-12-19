@@ -109,6 +109,9 @@ typedef struct {
     // Turns the module functionality off
     int enabled;
 
+    // Used on remote data, how many times to try
+    int tries;
+
     // ETag initializer
     apr_uint64_t seed;
     // Buffer for the emtpy tile etag
