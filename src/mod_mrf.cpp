@@ -395,7 +395,7 @@ static int send_image(request_rec *r, apr_uint32_t *buffer, apr_size_t size)
     //
 
     ap_set_content_length(r, size);
-    ap_rwrite(buffer, size, r);
+    ap_rwrite(buffer, static_cast<int>(size), r);
     return OK;
 }
 
