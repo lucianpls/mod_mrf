@@ -185,6 +185,12 @@ static const char *parse_sources(cmd_parms *cmd, const char *src, apr_array_head
     return nullptr;
 }
 
+static int get_bool(const char *s) {
+    while (*s != 0 && (*s == ' ' || *s == '\t'))
+        s++;
+    return (!ap_cstr_casecmp(s, "On") || !ap_cstr_casecmp(s, "1"));
+}
+
 /*
  Read the configuration file, which is a key-value text file, with one key per line
  comment lines that start with #
@@ -230,6 +236,9 @@ static const char *parse_sources(cmd_parms *cmd, const char *src, apr_array_head
  Optional, 64 bits in base32 digits.  Defaults to 0
  The empty tile ETag will be this value but bit 64 (65th bit) is set. All the other tiles
  have ETags that depend on this one and bit 64 is zero
+
+ Indirect <On|1>
+ Optional, the module will only honor subrequests if set
  */
 
 static const char *mrf_file_set(cmd_parms *cmd, void *dconf, const char *arg)
@@ -299,6 +308,10 @@ static const char *mrf_file_set(cmd_parms *cmd, void *dconf, const char *arg)
     line = apr_table_get(kvp, "SkippedLevels");
     if (line)
         c->skip_levels = atoi(line);
+
+    // Check the indirect flag
+    if (nullptr != (line = apr_table_get(kvp, "Indirect")))
+        c->indirect = get_bool(line);
 
     // If an emtpy tile is not provided, it falls through, which usually results in a 404 error
     // If provided, it has an optional size and offset followed by file name which defaults to datafile
@@ -562,12 +575,14 @@ static const source_t *get_source(const apr_array_header_t *sources, TIdx *index
 static int handler(request_rec *r)
 {
     // Only get and no arguments
-    if (r->args) return DECLINED; // Don't accept arguments
+    if (r->args || r->method_number != M_GET) return DECLINED; // Don't accept arguments
 
     mrf_conf *cfg = (mrf_conf *)ap_get_module_config(r->request_config, &mrf_module)
         ? (mrf_conf *)ap_get_module_config(r->request_config, &mrf_module)
         : (mrf_conf *)ap_get_module_config(r->per_dir_config, &mrf_module);
-    if (!cfg->enabled || !our_request(r, cfg)) return DECLINED;
+
+    if (!cfg->enabled || (cfg->indirect && !r->main) || !our_request(r, cfg))
+        return DECLINED;
 
     apr_array_header_t *tokens = tokenize(r->pool, r->uri, '/');
     if (tokens->nelts < 3) return DECLINED; // At least Level Row Column

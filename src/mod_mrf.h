@@ -115,6 +115,8 @@ typedef struct {
 
     // Turns the module functionality off
     int enabled;
+    // If set, only secondary requests are allowed
+    int indirect;
 
     // Used on remote data, how many times to try
     int tries;
