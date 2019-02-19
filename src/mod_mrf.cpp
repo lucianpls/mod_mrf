@@ -547,9 +547,11 @@ static bool our_request(request_rec *r, mrf_conf *cfg) {
 static const source_t *get_source(const apr_array_header_t *sources, TIdx *index) {
     for (int i = 0; i < sources->nelts; i++) {
         source_t *source = &APR_ARRAY_IDX(sources, i, source_t);
-        if ((source->range.offset == 0 && source->range.size == 0) ||
-            (index->offset > source->range.offset &&
-            (source->range.offset - index->offset + index->size) <= source->range.size)) {
+        if ((source->range.offset == 0 && source->range.size == 0)
+            || (index->offset >= source->range.offset 
+                && (source->range.size == 0
+                    || index->offset - source->range.offset + index->size <= source->range.size)))
+        {
             index->offset -= source->range.offset;
             return source;
         }
