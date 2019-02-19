@@ -39,7 +39,6 @@ static apr_array_header_t* tokenize(apr_pool_t *p, const char *s, char sep = '/'
 static apr_table_t *read_pKVP_from_file(apr_pool_t *pool, const char *fname, char **err_message)
 
 {
-    // Should parse it here and initialize the configuration structure
     ap_configfile_t *cfg_file;
     apr_status_t s = ap_pcfg_openfile(&cfg_file, pool, fname);
 
@@ -56,6 +55,9 @@ static apr_table_t *read_pKVP_from_file(apr_pool_t *pool, const char *fname, cha
             continue;
         const char *value = buffer;
         char *key = ap_getword_white(pool, &value);
+        if (strlen(key) == 0)
+            continue;
+        // add allows multiple values with the same key
         apr_table_add(table, key, value);
     }
 
@@ -179,7 +181,10 @@ static const char *set_regexp(cmd_parms *cmd, mrf_conf *c, const char *pattern)
  Optional, the pagesize in pixels.  X and Y default to 512. Z has to be 1 if C is provided, which has to match the C value from size
 
  DataFile string
- Mandatory, the data file of the MRF.
+ Mandatory, the data file of the MRF. Or provide a Redirect directive
+
+ Redirect
+ Instead of reading from the data file, make range requests to this URI
 
  IndexFile string
  Optional, The index file name.
@@ -197,9 +202,6 @@ static const char *set_regexp(cmd_parms *cmd, mrf_conf *c, const char *pattern)
  SkippedLevels <N>
  Optional, how many levels to ignore, at the top of the MRF pyramid
  For example a GCS pyramid will have to skip the one tile level, so this should be 1
-
- Redirect
- Instead of reading from the data file, make range requests to this URI
 
  ETagSeed base32_string
  Optional, 64 bits in base32 digits.  Defaults to 0
@@ -273,7 +275,7 @@ static const char *mrf_file_set(cmd_parms *cmd, void *dconf, const char *arg)
     if (line)
         c->skip_levels = atoi(line);
 
-    // If an emtpy tile is not provided, it falls through
+    // If an emtpy tile is not provided, it falls through, which usually results in a 404 error
     // If provided, it has an optional size and offset followed by file name which defaults to datafile
     // read the empty tile
     const char *efname = c->datafname; // Default file name is data file
@@ -297,8 +299,8 @@ static const char *mrf_file_set(cmd_parms *cmd, void *dconf, const char *arg)
     line = apr_table_get(kvp, "Redirect");
     if (line) {
         c->redirect = apr_pstrdup(cmd->pool, line);
-        line = apr_table_get(kvp, "RetryCount");
 
+        line = apr_table_get(kvp, "RetryCount");
         c->tries = 1 + (line?atoi(line):0);
         if ((c->tries < 1) || (c->tries > 100))
             return "Invalid RetryCount value, should be 0 to 99, defaults to 4";
@@ -593,7 +595,7 @@ static int handler(request_rec *r)
     if (cfg->redirect) {
         // TODO: S3 authorized requests
         ap_filter_rec_t *receive_filter = ap_get_output_filter_handle("Receive");
-        SERR_IF(!receive_filter, "Redirect needs mod_receive to be available");
+        SERR_IF(!receive_filter, "Using redirect requires mod_receive");
 
         // Get a buffer for the received image
         receive_ctx rctx;
@@ -625,8 +627,6 @@ static int handler(request_rec *r)
                 return HTTP_SERVICE_UNAVAILABLE;
             }
         } while (rctx.size != static_cast<int>(index.size));
-
-        apr_table_clear(r->headers_out);
     }
     else
     { // Read from a local file
