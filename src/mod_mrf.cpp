@@ -167,7 +167,7 @@ static const char *parse_sources(cmd_parms *cmd, const char *src, apr_array_head
     apr_array_header_t *inputs = tokenize(cmd->temp_pool, src, ',');
     for (int i = 0; i < inputs->nelts; i++) {
         source_t *entry = &APR_ARRAY_PUSH(arr, source_t);
-        memset(entry, 0, sizeof(entry));
+        memset(entry, 0, sizeof(source_t));
         char *input = APR_ARRAY_IDX(inputs, i, char *);
         char *fname = ap_getword_white_nc(arr->pool, &input);
         if (!fname)
