@@ -1,7 +1,7 @@
 /*
 * An OnEarth module that serves tiles from an MRF
 * Lucian Plesea
-* (C) 2016-2017
+* (C) 2016-2018
 */
 
 #include "mod_mrf.h"
@@ -159,7 +159,30 @@ static const char *set_regexp(cmd_parms *cmd, mrf_conf *c, const char *pattern)
         c->arr_rxp = apr_array_make(cmd->pool, 2, sizeof(ap_regex_t *));
     ap_regex_t **m = (ap_regex_t **)apr_array_push(c->arr_rxp);
     *m = ap_pregcomp(cmd->pool, pattern, 0);
-    return (NULL != *m) ? NULL : "Bad regular expression";
+    return (nullptr != *m) ? nullptr : "Bad regular expression";
+}
+
+// Parse a comma separated list of sources, add the entries to the array arr, either fnames or redirects
+static const char *parse_sources(cmd_parms *cmd, const char *src, apr_array_header_t *arr, int fnames = 1) {
+    apr_array_header_t *inputs = tokenize(cmd->temp_pool, src, ',');
+    for (int i = 0; i < inputs->nelts; i++) {
+        source_t *entry = &APR_ARRAY_PUSH(arr, source_t);
+        memset(entry, 0, sizeof(entry));
+        char *input = APR_ARRAY_IDX(inputs, i, char *);
+        char *fname = ap_getword_white_nc(arr->pool, &input);
+        if (!fname)
+            return "Missing source name";
+        if (fnames)
+            entry->datafname = fname;
+        else
+            entry->redirect = fname;
+        // See if there are more arguments, should be offset and size
+        if (*input != 0)
+            entry->range.offset = strtoull(input, &input, 0);
+        if (*input != 0)
+            entry->range.size = strtoull(input, &input, 0);
+    }
+    return nullptr;
 }
 
 /*
@@ -244,21 +267,23 @@ static const char *mrf_file_set(cmd_parms *cmd, void *dconf, const char *arg)
     // Initialize the run-time structures
     mrf_init(cmd->pool, c);
 
-    // The DataFile is optional, if provided the index file is the same thing with the extension removed
-    line = apr_table_get(kvp, "DataFile");
+    if (!c->source)
+        c->source = apr_array_make(cmd->pool, 1, sizeof(source_t));
 
-    // Data and index in the same location by default
-    if (line) { // If the data file has a three letter extension, change it to idx for the index
-        c->datafname = apr_pstrdup(cmd->pool, line);
-        c->idxfname = apr_pstrdup(cmd->pool, line);
-        char *last;
-        char *token = apr_strtok(c->idxfname, ".", &last); // strtok destroys the idxfile
-        while (*last != 0 && token != NULL)
-            token = apr_strtok(NULL, ".", &last);
-        memcpy(c->idxfname, c->datafname, strlen(c->datafname)); // Get a new copy
-        if (token != NULL && strlen(token) == 3)
-            memcpy(token, "idx", 3);
-    }
+    // The DataFile is alternative with Redirect
+    if ((NULL != (line = apr_table_getm(cmd->temp_pool, kvp, "DataFile"))) &&
+        (NULL != (line = parse_sources(cmd, line, c->source))))
+        return line;
+
+    // The DataFile is alternative with Redirect
+    if ((NULL != (line = apr_table_getm(cmd->temp_pool, kvp, "Redirect"))) &&
+        (NULL != (line = parse_sources(cmd, line, c->source, 0))))
+        return line;
+
+    line = apr_table_get(kvp, "RetryCount");
+    c->tries = 1 + (line ? atoi(line) : 0);
+    if ((c->tries < 1) || (c->tries > 100))
+        return "Invalid RetryCount value, should be 0 to 99, defaults to 4";
 
     // Index file can also be provided
     line = apr_table_get(kvp, "IndexFile");
@@ -278,7 +303,13 @@ static const char *mrf_file_set(cmd_parms *cmd, void *dconf, const char *arg)
     // If an emtpy tile is not provided, it falls through, which usually results in a 404 error
     // If provided, it has an optional size and offset followed by file name which defaults to datafile
     // read the empty tile
-    const char *efname = c->datafname; // Default file name is data file
+    // Default file name is the name of the first data file, if provided
+    const char *datafname = NULL;
+    for (int i = 0; i < c->source->nelts; i++)
+        if (NULL != (datafname = APR_ARRAY_IDX(c->source, i, source_t).datafname))
+            break;
+
+    const char *efname = datafname;
     line = apr_table_get(kvp, "EmptyTile");
     if (line) {
         char *last;
@@ -295,19 +326,8 @@ static const char *mrf_file_set(cmd_parms *cmd, void *dconf, const char *arg)
             efname = last;
     }
 
-
-    line = apr_table_get(kvp, "Redirect");
-    if (line) {
-        c->redirect = apr_pstrdup(cmd->pool, line);
-
-        line = apr_table_get(kvp, "RetryCount");
-        c->tries = 1 + (line?atoi(line):0);
-        if ((c->tries < 1) || (c->tries > 100))
-            return "Invalid RetryCount value, should be 0 to 99, defaults to 4";
-    }
-
     // If we're provided a file name or a size, pre-read the empty tile in the
-    if (efname && (c->datafname == NULL || apr_strnatcmp(c->datafname, efname) || c->esize))
+    if (efname && (datafname == NULL || apr_strnatcmp(datafname, efname) || c->esize))
     {
         apr_file_t *efile;
         apr_off_t offset = c->eoffset;
@@ -344,9 +364,21 @@ static const char *mrf_file_set(cmd_parms *cmd, void *dconf, const char *arg)
     c->seed = line ? base32decode(line, &flag) : 0;
     // Set the missing tile etag, with the extra bit set
     uint64tobase32(c->seed, c->eETag, 1);
-    // check configuration sanity
-    if (!c->idxfname)
-        return apr_psprintf(cmd->pool, "MRF configuration %s an IndexFile directive", arg);
+
+    // Set the index file name based on the first data file, if there is only one
+    if (!c->idxfname) {
+        if (!datafname)
+            return "Missing IndexFile or DataFile directive";
+        c->idxfname = apr_pstrdup(cmd->pool, datafname);
+        char *last;
+        char *token = apr_strtok(c->idxfname, ".", &last); // strtok destroys the idxfile
+        while (*last != 0 && token != NULL)
+            token = apr_strtok(NULL, ".", &last);
+        memcpy(c->idxfname, datafname, strlen(datafname)); // Get a new copy
+        if (token != NULL && strlen(token) == 3)
+            memcpy(token, "idx", 3);
+    }
+
     c->enabled = 1;
     return NULL;
 }
@@ -511,6 +543,20 @@ static bool our_request(request_rec *r, mrf_conf *cfg) {
 }
 
 
+// Return the first source which contains the index, adjusts the index offset if necessary
+static const source_t *get_source(const apr_array_header_t *sources, TIdx *index) {
+    for (int i = 0; i < sources->nelts; i++) {
+        source_t *source = &APR_ARRAY_IDX(sources, i, source_t);
+        if ((source->range.offset == 0 && source->range.size == 0) ||
+            (index->offset > source->range.offset &&
+            (source->range.offset - index->offset + index->size) <= source->range.size)) {
+            index->offset -= source->range.offset;
+            return source;
+        }
+    }
+    return NULL;
+}
+
 static int handler(request_rec *r)
 {
     // Only get and no arguments
@@ -576,7 +622,7 @@ static int handler(request_rec *r)
         return HTTP_INTERNAL_SERVER_ERROR;
     }
 
-    // Check for conditional ETag here, no need to open the data file
+    // Check for conditional ETag here, no need to get the data
     char ETag[16];
     // Try to distribute the bits a bit to generate an ETag
     uint64tobase32(cfg->seed ^ (index.size << 40) ^ index.offset, ETag);
@@ -586,13 +632,15 @@ static int handler(request_rec *r)
     }
 
     // Now for the data part
-    if (!cfg->datafname && !cfg->redirect)
+    const source_t *src = get_source(cfg->source, &index);
+
+    if (!src || (!src->datafname && !src->redirect))
         SERR_IF(true, apr_psprintf(r->pool, "No data file configured for %s", r->uri));
 
     apr_uint32_t *buffer = static_cast<apr_uint32_t *>(
         apr_palloc(r->pool, static_cast<apr_size_t>(index.size)));
 
-    if (cfg->redirect) {
+    if (src->redirect) {
         // TODO: S3 authorized requests
         ap_filter_rec_t *receive_filter = ap_get_output_filter_handle("Receive");
         SERR_IF(!receive_filter, "Using redirect requires mod_receive");
@@ -611,7 +659,7 @@ static int handler(request_rec *r)
         int tries = cfg->tries;
         apr_time_t now = apr_time_now();
         do {
-            request_rec *sr = ap_sub_req_lookup_uri(cfg->redirect, r, r->output_filters);
+            request_rec *sr = ap_sub_req_lookup_uri(src->redirect, r, r->output_filters);
             apr_table_setn(sr->headers_in, "Range", Range);
             ap_filter_t *rf = ap_add_output_filter_handle(receive_filter, &rctx, sr, sr->connection);
             int status = ap_run_sub_req(sr);
@@ -623,24 +671,24 @@ static int handler(request_rec *r)
             && (0 == tries--))
             { // Abort here
                 ap_log_rerror(APLOG_MARK, APLOG_ERR, 0, r, "Can't fetch data from %s, took us %" APR_TIME_T_FMT,
-                    cfg->redirect, apr_time_now() - now);
+                    src->redirect, apr_time_now() - now);
                 return HTTP_SERVICE_UNAVAILABLE;
             }
         } while (rctx.size != static_cast<int>(index.size));
     }
     else
     { // Read from a local file
-        SERR_IF(open_data_file(r, &dataf, cfg->datafname),
-            apr_psprintf(r->pool, "Can't open %s", cfg->datafname));
+        SERR_IF(open_data_file(r, &dataf, src->datafname),
+            apr_psprintf(r->pool, "Can't open %s", src->datafname));
 
         // We got the tile index, and is not empty
         SERR_IF(!buffer,
             "Memory allocation error in mod_mrf");
         SERR_IF(apr_file_seek(dataf, APR_SET, (apr_off_t *)&index.offset),
-            apr_psprintf(r->pool, "Seek error in %s", cfg->datafname));
+            apr_psprintf(r->pool, "Seek error in %s", src->datafname));
         read_size = static_cast<apr_size_t>(index.size);
         SERR_IF(apr_file_read(dataf, buffer, &read_size) || read_size != index.size,
-            apr_psprintf(r->pool, "Can't read from %s", cfg->datafname));
+            apr_psprintf(r->pool, "Can't read from %s", src->datafname));
     }
 
     // Looks fine, set the outgoing etag and then the image

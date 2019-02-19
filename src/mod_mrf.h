@@ -1,7 +1,7 @@
 /*
 * mod_mrf header file
 * Lucian Plesea
-* (C) 2016
+* (C) 2016-2018
 */
 
 #if !defined(MOD_MRF_H)
@@ -81,11 +81,18 @@ typedef struct {
     apr_uint64_t size;
 } TIdx;
 
+// A data source, either local file or a redirect
+// the range, if not 0,0, holds the valid offset ranges in this source
+typedef struct {
+    char *redirect;
+    char *datafname;
+    TIdx range;
+} source_t;
+
 typedef struct {
     // array of guard regexp, one of them has to match
     apr_array_header_t *arr_rxp;
-    // The mrf data file name
-    char *datafname;     
+    apr_array_header_t *source;
     // The mrf index file name
     char *idxfname;
     // Forced mime-type, default is autodetected
@@ -116,9 +123,6 @@ typedef struct {
     apr_uint64_t seed;
     // Buffer for the emtpy tile etag
     char eETag[16];
-    // The internal redirect path or null
-    char *redirect;
-
 } mrf_conf;
 
 extern module AP_MODULE_DECLARE_DATA mrf_module;
