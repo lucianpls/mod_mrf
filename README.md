@@ -52,7 +52,7 @@ AHTSE Control Directives for thiccs module are:
  - Optional, how many levels to ignore, at the top of the MRF pyramid. For example a GCS pyramid will have to skip the one tile level, so this should be 1
  
 ***ETagSeed base32_string***
- - Optional, 64 bits as 13 base32 digits, defaults to 0. The empty tile ETag will be this value but bit 64 (65th bit) is set. All the other tiles have 64 bit ETags that depend on this value.
+ - Optional, 64 bits as 13 base32 digits [0-9a-v], defaults to 0. The empty tile ETag will be this value but bit 64 (65th bit) is set. All the other tiles have 64 bit ETags that depend on this value.
  
 
 For better performance on local files, the httpd source against which this module is compiled should include support for random file access optimization. A patch file for libapr is provided, see apr_FOPEN_RANDOM.patch
