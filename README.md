@@ -17,10 +17,11 @@ This module takes two apache configuration directives:
 
 **MRF_ConfigurationFile  Filename**
 
- Points to a text file that contains lines, where the first word on a line is a directive, followed by parameters
+ Points to an AHTSE Control text file, where the first word on a line is a directive, followed by parameters
  - Empty lines, lines that start with # are considered comments
  - Unknown directives are ignored
- - Known directives for this module are:
+
+AHTSE Control Directives for this module are:
 
 ***Size X Y Z C***
  - Mandatory, at least x and y, the size in pixels of the input MRF.  Z defaults to 1 and C defaults to 3 (these are usually not meaningful)
