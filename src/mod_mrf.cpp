@@ -12,6 +12,10 @@
 
 using namespace std;
 
+#if APR_SUCCESS != 0
+#error "APR_SUCCESS is not null"
+#endif
+
 static void *create_dir_config(apr_pool_t *p, char *dummy)
 {
     mrf_conf *c =
@@ -185,12 +189,6 @@ static const char *parse_sources(cmd_parms *cmd, const char *src, apr_array_head
     return nullptr;
 }
 
-static int get_bool(const char *s) {
-    while (*s != 0 && (*s == ' ' || *s == '\t'))
-        s++;
-    return (!ap_cstr_casecmp(s, "On") || !ap_cstr_casecmp(s, "1"));
-}
-
 /*
  Read the configuration file, which is a key-value text file, with one key per line
  comment lines that start with #
@@ -237,8 +235,6 @@ static int get_bool(const char *s) {
  The empty tile ETag will be this value but bit 64 (65th bit) is set. All the other tiles
  have ETags that depend on this one and bit 64 is zero
 
- Indirect <On|1>
- Optional, the module will only honor subrequests if set
  */
 
 static const char *mrf_file_set(cmd_parms *cmd, void *dconf, const char *arg)
@@ -308,10 +304,6 @@ static const char *mrf_file_set(cmd_parms *cmd, void *dconf, const char *arg)
     line = apr_table_get(kvp, "SkippedLevels");
     if (line)
         c->skip_levels = atoi(line);
-
-    // Check the indirect flag
-    if (nullptr != (line = apr_table_get(kvp, "Indirect")))
-        c->indirect = get_bool(line);
 
     // If an emtpy tile is not provided, it falls through, which usually results in a 404 error
     // If provided, it has an optional size and offset followed by file name which defaults to datafile
@@ -487,7 +479,7 @@ static apr_status_t open_connection_file(request_rec *r, apr_file_t **ppfh, cons
     // Use the connection pool for the note and file, to ensure it gets closed with the connection
     apr_pool_t *pool = r->connection->pool;
 
-    if (fn != NULL) { // We have an file note but it is not the right file
+    if (fn != NULL) { // We have a file note but it is not the right file
         apr_table_unset(conn_notes, note_name); // Unhook the existing note
         apr_file_close(fn->pfh); // Close the existing file
     }
@@ -572,6 +564,23 @@ static const source_t *get_source(const apr_array_header_t *sources, TIdx *index
     return NULL;
 }
 
+static const char *read_index(request_rec *r, TIdx *idx, apr_off_t offset) {
+    mrf_conf *cfg = (mrf_conf *)ap_get_module_config(r->request_config, &mrf_module);
+    apr_file_t *idxf;
+    if (open_index_file(r, &idxf, cfg->idxfname))
+        return apr_psprintf(r->pool, "Can't open index %s", cfg->idxfname);
+
+    apr_size_t read_size = sizeof(TIdx);
+    if (apr_file_seek(idxf, APR_SET, &offset)
+        || apr_file_read(idxf, &idx, &read_size)
+        || read_size != sizeof(TIdx))
+        return apr_psprintf(r->pool, "Invalid read in %s", cfg->idxfname);
+
+    idx->offset = ntoh64(idx->offset);
+    idx->size = ntoh64(idx->size);
+    return nullptr;
+}
+
 static int handler(request_rec *r)
 {
     // Only get and no arguments
@@ -616,21 +625,12 @@ static int handler(request_rec *r)
     apr_off_t tidx_offset = level->offset +
         sizeof(TIdx) * (tile.x + level->width * (tile.z * level->height + tile.y));
 
-    apr_file_t *idxf, *dataf;
-    SERR_IF(open_index_file(r, &idxf, cfg->idxfname),
-        apr_psprintf(r->pool, "Can't open index %s", cfg->idxfname));
     TIdx index;
-    apr_size_t read_size = sizeof(TIdx);
-
-    SERR_IF(apr_file_seek(idxf, APR_SET, &tidx_offset) 
-        || apr_file_read(idxf, &index, &read_size) 
-        || read_size != sizeof(TIdx),
-        apr_psprintf(r->pool, "Tile index doesn't exist in %s", cfg->idxfname));
+    const char *message;
+    SERR_IF((message = read_index(r, &index, tidx_offset)),
+        message);
 
     // MRF index record is in network order
-    index.size = ntoh64(index.size);
-    index.offset = ntoh64(index.offset);
-
     if (index.size < 4) // Need at least four bytes for signature check
         return send_empty_tile(r);
 
@@ -656,6 +656,8 @@ static int handler(request_rec *r)
 
     apr_uint32_t *buffer = static_cast<apr_uint32_t *>(
         apr_palloc(r->pool, static_cast<apr_size_t>(index.size)));
+    SERR_IF(!buffer,
+        "Memory allocation error in mod_mrf");
 
     if (src->redirect) {
         // TODO: S3 authorized requests
@@ -669,8 +671,8 @@ static int handler(request_rec *r)
         rctx.size = 0;
 
         // Data file is on a remote site a range request redirect with a range header
-        static const char *rfmt = "bytes=%" APR_UINT64_T_FMT "-%" APR_UINT64_T_FMT;
-        char *Range = apr_psprintf(r->pool, rfmt, index.offset, index.offset + index.size);
+        char *Range = apr_psprintf(r->pool, "bytes=%" APR_UINT64_T_FMT "-%" APR_UINT64_T_FMT,
+            index.offset, index.offset + index.size);
 
         // S3 may return less than requested, so we retry the request a couple of times
         int tries = cfg->tries;
@@ -687,7 +689,8 @@ static int handler(request_rec *r)
                 || rctx.size != static_cast<int>(index.size))
             && (0 == tries--))
             { // Abort here
-                ap_log_rerror(APLOG_MARK, APLOG_ERR, 0, r, "Can't fetch data from %s, took us %" APR_TIME_T_FMT,
+                ap_log_rerror(APLOG_MARK, APLOG_ERR, 0, r, 
+                    "Can't fetch data from %s, took us %" APR_TIME_T_FMT,
                     src->redirect, apr_time_now() - now);
                 return HTTP_SERVICE_UNAVAILABLE;
             }
@@ -695,15 +698,15 @@ static int handler(request_rec *r)
     }
     else
     { // Read from a local file
+        apr_file_t *dataf;
         SERR_IF(open_data_file(r, &dataf, src->datafname),
             apr_psprintf(r->pool, "Can't open %s", src->datafname));
 
         // We got the tile index, and is not empty
-        SERR_IF(!buffer,
-            "Memory allocation error in mod_mrf");
         SERR_IF(apr_file_seek(dataf, APR_SET, (apr_off_t *)&index.offset),
             apr_psprintf(r->pool, "Seek error in %s", src->datafname));
-        read_size = static_cast<apr_size_t>(index.size);
+
+        apr_size_t read_size = static_cast<apr_size_t>(index.size);
         SERR_IF(apr_file_read(dataf, buffer, &read_size) || read_size != index.size,
             apr_psprintf(r->pool, "Can't read from %s", src->datafname));
     }
@@ -721,6 +724,14 @@ static const command_rec mrf_cmds[] =
     (void *)APR_OFFSETOF(mrf_conf, enabled),
     ACCESS_CONF,
     "mod_mrf enable, defaults to on if configuration is provided"
+    ),
+
+    AP_INIT_FLAG(
+    "MRF_Indirect",
+    CMD_FUNC ap_set_flag_slot,
+    (void *)APR_OFFSETOF(mrf_conf, indirect),
+    ACCESS_CONF,
+    "If set, this configuration only responds to subrequests"
     ),
 
     AP_INIT_TAKE1(
