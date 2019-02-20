@@ -7,6 +7,10 @@ This module takes two apache configuration directives:
  
  Defaults to on if the MRF_ConfigurationFile is provided
 
+ **MRF_RegExp**
+
+ Required, only requests matching this pattern are handled.  It can appear multiple times
+
  **MRF_Indirect On|Off**
 
  If set, this module will only respond to internal subrequests
@@ -24,9 +28,6 @@ This module takes two apache configuration directives:
   **DataFile string**
   - Mandatory, the path to the data file of the MRF.
 
-  **RegExp**
-  - Optional, a regular expression that must match the request URL for it to be considered a tile request.  By default all URLs are considered tile requests.  This directive can appear multiple times.  If there are multiple RegExp lines, at least one has to match the request URL.
-  
   **PageSize X Y 1 C**
   - Optional, the pagesize in pixels.  X and Y default to 512. Z has to be 1 if C is provided, which has to match the C value from size
 
