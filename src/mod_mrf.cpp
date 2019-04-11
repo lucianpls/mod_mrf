@@ -16,12 +16,19 @@ using namespace std;
 #error "APR_SUCCESS is not null"
 #endif
 
-static void *create_dir_config(apr_pool_t *p, char *dummy)
+static inline void *create_dir_config(apr_pool_t *p, char *dummy)
 {
     mrf_conf *c =
         (mrf_conf *)apr_pcalloc(p, sizeof(mrf_conf));
     c->tries = 5;
     return c;
+}
+
+// Use the request config if it exists, otherwise use directory config
+static inline mrf_conf * get_conf(request_rec *r) {
+    mrf_conf *cfg = (mrf_conf *)ap_get_module_config(r->request_config, &mrf_module);
+    if (cfg) return cfg;
+    return (mrf_conf *)ap_get_module_config(r->per_dir_config, &mrf_module);
 }
 
 //
@@ -543,13 +550,6 @@ static bool our_request(request_rec *r, mrf_conf *cfg) {
     return false;
 }
 
-// Use the request config if it exists, otherwise use directory config
-static inline mrf_conf * get_conf(request_rec *r) {
-    mrf_conf *cfg = (mrf_conf *)ap_get_module_config(r->request_config, &mrf_module);
-    if (cfg) return cfg;
-    return (mrf_conf *)ap_get_module_config(r->per_dir_config, &mrf_module);
-}
-
 // Return the first source which contains the index, adjusts the index offset if necessary
 static const source_t *get_source(const apr_array_header_t *sources, TIdx *index) {
     for (int i = 0; i < sources->nelts; i++) {
@@ -575,7 +575,7 @@ static const char *read_index(request_rec *r, TIdx *idx, apr_off_t offset) {
 
     apr_size_t read_size = sizeof(TIdx);
     if (apr_file_seek(idxf, APR_SET, &offset)
-        || apr_file_read(idxf, &idx, &read_size)
+        || apr_file_read(idxf, idx, &read_size)
         || read_size != sizeof(TIdx))
         return apr_psprintf(r->pool, "Invalid read in %s", cfg->idxfname);
 
