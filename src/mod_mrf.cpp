@@ -395,9 +395,7 @@ static int etag_matches(request_rec *r, const char *ETag) {
 
 static int send_image(request_rec *r, apr_uint32_t *buffer, apr_size_t size)
 {
-    mrf_conf *cfg = (mrf_conf *)ap_get_module_config(r->request_config, &mrf_module)
-        ? (mrf_conf *)ap_get_module_config(r->request_config, &mrf_module)
-        : (mrf_conf *)ap_get_module_config(r->per_dir_config, &mrf_module);
+    mrf_conf *cfg = get_conf(r);
     if (cfg->mime_type)
         ap_set_content_type(r, cfg->mime_type);
     else
@@ -440,9 +438,7 @@ static int send_image(request_rec *r, apr_uint32_t *buffer, apr_size_t size)
 
 // Returns the empty tile if defined
 static int send_empty_tile(request_rec *r) {
-    mrf_conf *cfg = (mrf_conf *)ap_get_module_config(r->request_config, &mrf_module)
-        ? (mrf_conf *)ap_get_module_config(r->request_config, &mrf_module)
-        : (mrf_conf *)ap_get_module_config(r->per_dir_config, &mrf_module);
+    mrf_conf *cfg = get_conf(r);
     if (etag_matches(r, cfg->eETag)) {
         apr_table_setn(r->headers_out, "ETag", cfg->eETag);
         return HTTP_NOT_MODIFIED;
@@ -547,6 +543,12 @@ static bool our_request(request_rec *r, mrf_conf *cfg) {
     return false;
 }
 
+// Use the request config if it exists, otherwise use directory config
+static inline mrf_conf * get_conf(request_rec *r) {
+    mrf_conf *cfg = (mrf_conf *)ap_get_module_config(r->request_config, &mrf_module);
+    if (cfg) return cfg;
+    return (mrf_conf *)ap_get_module_config(r->per_dir_config, &mrf_module);
+}
 
 // Return the first source which contains the index, adjusts the index offset if necessary
 static const source_t *get_source(const apr_array_header_t *sources, TIdx *index) {
@@ -565,7 +567,8 @@ static const source_t *get_source(const apr_array_header_t *sources, TIdx *index
 }
 
 static const char *read_index(request_rec *r, TIdx *idx, apr_off_t offset) {
-    mrf_conf *cfg = (mrf_conf *)ap_get_module_config(r->request_config, &mrf_module);
+    mrf_conf *cfg = get_conf(r);
+
     apr_file_t *idxf;
     if (open_index_file(r, &idxf, cfg->idxfname))
         return apr_psprintf(r->pool, "Can't open index %s", cfg->idxfname);
@@ -586,10 +589,7 @@ static int handler(request_rec *r)
     // Only get and no arguments
     if (r->args || r->method_number != M_GET) return DECLINED; // Don't accept arguments
 
-    mrf_conf *cfg = (mrf_conf *)ap_get_module_config(r->request_config, &mrf_module)
-        ? (mrf_conf *)ap_get_module_config(r->request_config, &mrf_module)
-        : (mrf_conf *)ap_get_module_config(r->per_dir_config, &mrf_module);
-
+    mrf_conf *cfg = get_conf(r);
     if (!cfg->enabled || (cfg->indirect && !r->main) || !our_request(r, cfg))
         return DECLINED;
 
