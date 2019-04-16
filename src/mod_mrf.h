@@ -85,7 +85,7 @@ typedef struct {
 // the range, if not 0,0, holds the valid offset ranges in this source
 typedef struct {
     char *redirect;
-    char *datafname;
+    char *fname;
     TIdx range;
 } source_t;
 
@@ -93,8 +93,8 @@ typedef struct {
     // array of guard regexp, one of them has to match
     apr_array_header_t *arr_rxp;
     apr_array_header_t *source;
-    // The mrf index file name
-    char *idxfname;
+    source_t idx;
+
     // Forced mime-type, default is autodetected
     char *mime_type;
     // Full raster size in pixels

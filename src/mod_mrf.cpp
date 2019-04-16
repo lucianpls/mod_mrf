@@ -180,13 +180,24 @@ static const char *parse_sources(cmd_parms *cmd, const char *src, apr_array_head
         source_t *entry = &APR_ARRAY_PUSH(arr, source_t);
         memset(entry, 0, sizeof(source_t));
         char *input = APR_ARRAY_IDX(inputs, i, char *);
+
         char *fname = ap_getword_white_nc(arr->pool, &input);
         if (!fname)
             return "Missing source name";
-        if (fnames)
-            entry->datafname = fname;
-        else
+
+        if (fnames) {
+            if (strlen(fname) > 3 && fname[0] == ':' && fname[1] == '/') {
+                // this is a new style redirect entry
+                entry->redirect = fname + 1;
+            }
+            else {
+                entry->fname = fname;
+            }
+        }
+        else {
             entry->redirect = fname;
+        }
+
         // See if there are more arguments, should be offset and size
         if (*input != 0)
             entry->range.offset = strtoull(input, &input, 0);
@@ -299,8 +310,9 @@ static const char *mrf_file_set(cmd_parms *cmd, void *dconf, const char *arg)
 
     // Index file can also be provided
     line = apr_table_get(kvp, "IndexFile");
-    if (line)
-        c->idxfname = apr_pstrdup(cmd->pool, line);
+    if (line) {
+        c->idx.fname = apr_pstrdup(cmd->pool, line);
+    }
 
     // Mime type is autodetected if not provided
     line = apr_table_get(kvp, "MimeType");
@@ -318,7 +330,7 @@ static const char *mrf_file_set(cmd_parms *cmd, void *dconf, const char *arg)
     // Default file name is the name of the first data file, if provided
     const char *datafname = NULL;
     for (int i = 0; i < c->source->nelts; i++)
-        if (NULL != (datafname = APR_ARRAY_IDX(c->source, i, source_t).datafname))
+        if (NULL != (datafname = APR_ARRAY_IDX(c->source, i, source_t).fname))
             break;
 
     const char *efname = datafname;
@@ -378,15 +390,15 @@ static const char *mrf_file_set(cmd_parms *cmd, void *dconf, const char *arg)
     uint64tobase32(c->seed, c->eETag, 1);
 
     // Set the index file name based on the first data file, if there is only one
-    if (!c->idxfname) {
+    if (!c->idx.fname) {
         if (!datafname)
             return "Missing IndexFile or DataFile directive";
-        c->idxfname = apr_pstrdup(cmd->pool, datafname);
+        c->idx.fname = apr_pstrdup(cmd->pool, datafname);
         char *last;
-        char *token = apr_strtok(c->idxfname, ".", &last); // strtok destroys the idxfile
+        char *token = apr_strtok(c->idx.fname, ".", &last); // strtok destroys the idxfile
         while (*last != 0 && token != NULL)
             token = apr_strtok(NULL, ".", &last);
-        memcpy(c->idxfname, datafname, strlen(datafname)); // Get a new copy
+        memcpy(c->idx.fname, datafname, strlen(datafname)); // Get a new copy
         if (token != NULL && strlen(token) == 3)
             memcpy(token, "idx", 3);
     }
@@ -570,14 +582,14 @@ static const char *read_index(request_rec *r, TIdx *idx, apr_off_t offset) {
     mrf_conf *cfg = get_conf(r);
 
     apr_file_t *idxf;
-    if (open_index_file(r, &idxf, cfg->idxfname))
-        return apr_psprintf(r->pool, "Can't open index %s", cfg->idxfname);
+    if (open_index_file(r, &idxf, cfg->idx.fname))
+        return apr_psprintf(r->pool, "Can't open index %s", cfg->idx.fname);
 
     apr_size_t read_size = sizeof(TIdx);
     if (apr_file_seek(idxf, APR_SET, &offset)
         || apr_file_read(idxf, idx, &read_size)
         || read_size != sizeof(TIdx))
-        return apr_psprintf(r->pool, "Invalid read in %s", cfg->idxfname);
+        return apr_psprintf(r->pool, "Invalid read in %s", cfg->idx.fname);
 
     idx->offset = ntoh64(idx->offset);
     idx->size = ntoh64(idx->size);
@@ -635,7 +647,8 @@ static int handler(request_rec *r)
         return send_empty_tile(r);
 
     if (MAX_TILE_SIZE < index.size) { // Tile is too large, log and send error code
-        ap_log_error(APLOG_MARK, APLOG_ERR, 0, r->server, "Tile too large in %s", cfg->idxfname);
+        ap_log_error(APLOG_MARK, APLOG_ERR, 0, r->server, "Tile too large in %s", 
+            cfg->idx.fname);
         return HTTP_INTERNAL_SERVER_ERROR;
     }
 
@@ -651,7 +664,7 @@ static int handler(request_rec *r)
     // Now for the data part
     const source_t *src = get_source(cfg->source, &index);
 
-    if (!src || (!src->datafname && !src->redirect))
+    if (!src || (!src->fname && !src->redirect))
         SERR_IF(true, apr_psprintf(r->pool, "No data file configured for %s", r->uri));
 
     apr_uint32_t *buffer = static_cast<apr_uint32_t *>(
@@ -699,16 +712,16 @@ static int handler(request_rec *r)
     else
     { // Read from a local file
         apr_file_t *dataf;
-        SERR_IF(open_data_file(r, &dataf, src->datafname),
-            apr_psprintf(r->pool, "Can't open %s", src->datafname));
+        SERR_IF(open_data_file(r, &dataf, src->fname),
+            apr_psprintf(r->pool, "Can't open %s", src->fname));
 
         // We got the tile index, and is not empty
         SERR_IF(apr_file_seek(dataf, APR_SET, (apr_off_t *)&index.offset),
-            apr_psprintf(r->pool, "Seek error in %s", src->datafname));
+            apr_psprintf(r->pool, "Seek error in %s", src->fname));
 
         apr_size_t read_size = static_cast<apr_size_t>(index.size);
         SERR_IF(apr_file_read(dataf, buffer, &read_size) || read_size != index.size,
-            apr_psprintf(r->pool, "Can't read from %s", src->datafname));
+            apr_psprintf(r->pool, "Can't read from %s", src->fname));
     }
 
     // Looks fine, set the outgoing etag and then the image
