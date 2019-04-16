@@ -68,12 +68,10 @@ struct sz {
     apr_int64_t x, y, z, c, l;
 };
 
+// width and height are in tiles
 struct rset {
     apr_off_t offset;
-    // in tiles
-    int width;
-    // in tiles
-    int height;
+    int width, height;
 };
 
 typedef struct {

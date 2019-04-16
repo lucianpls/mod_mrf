@@ -186,15 +186,14 @@ static const char *parse_sources(cmd_parms *cmd, const char *src, apr_array_head
             return "Missing source name";
 
         if (fnames) {
-            if (strlen(fname) > 3 && fname[0] == ':' && fname[1] == '/') {
-                // this is a new style redirect entry
-                entry->redirect = fname + 1;
-            }
-            else {
+            if (strlen(fname) > 3 && fname[0] == ':' && fname[1] == '/')
+                entry->redirect = fname + 1;   // new style redirect
+
+            else
                 entry->fname = fname;
-            }
         }
         else {
+            // Old style redirect
             entry->redirect = fname;
         }
 
@@ -308,10 +307,13 @@ static const char *mrf_file_set(cmd_parms *cmd, void *dconf, const char *arg)
     if ((c->tries < 1) || (c->tries > 100))
         return "Invalid RetryCount value, should be 0 to 99, defaults to 4";
 
-    // Index file can also be provided
+    // Index file can also be provided, there could be a default
     line = apr_table_get(kvp, "IndexFile");
     if (line) {
-        c->idx.fname = apr_pstrdup(cmd->pool, line);
+        if (strlen(line) > 2 && line[0] == ':' && line[1] == '/')
+            c->idx.redirect = apr_pstrdup(cmd->pool, line + 1);
+        else
+            c->idx.fname = apr_pstrdup(cmd->pool, line);
     }
 
     // Mime type is autodetected if not provided
@@ -478,15 +480,14 @@ static const apr_int32_t open_flags = APR_FOPEN_READ | APR_FOPEN_BINARY | APR_FO
 /*
  * Open or retrieve an connection cached file.
  */
-static apr_status_t open_connection_file(request_rec *r, apr_file_t **ppfh, const char *name,
-    apr_int32_t flags = open_flags, const char *note_name = "MRF_INDEX_FILE")
-
+static apr_status_t open_connection_file(request_rec *r, apr_file_t **ppfh, 
+    const source_t &src, const char *note_name, apr_int32_t flags = open_flags)
 {
     apr_table_t *conn_notes = r->connection->notes;
 
     // Try to pick it up from the connection notes
     file_note *fn = (file_note *) apr_table_get(conn_notes, note_name);
-    if ((fn != NULL) && !apr_strnatcmp(name, fn->name)) { // Match, set file and return
+    if ((fn != NULL) && !apr_strnatcmp(src.fname, fn->name)) { // Match, set file and return
         *ppfh = fn->pfh;
         return APR_SUCCESS;
     }
@@ -502,30 +503,31 @@ static apr_status_t open_connection_file(request_rec *r, apr_file_t **ppfh, cons
         fn = (file_note *)apr_palloc(pool, sizeof(file_note));
     }
 
-    apr_status_t stat = apr_file_open(ppfh, name, flags, 0, pool);
+    apr_status_t stat = apr_file_open(ppfh, src.fname, flags, 0, pool);
     if (stat != APR_SUCCESS) 
         return stat;
 
     // Fill the note and hook it up, then return
     fn->pfh = *ppfh;
-    fn->name = apr_pstrdup(pool, name); // The old string will persist until cleaned by the pool
+    fn->name = apr_pstrdup(pool, src.fname); // The old string will persist until cleaned by the pool
     apr_table_setn(conn_notes, note_name, (const char *) fn);
     return APR_SUCCESS;
 }
 
-#define open_index_file open_connection_file
-
 // Open data file optimized for random access if possible
-static apr_status_t open_data_file(request_rec *r, apr_file_t **ppfh, const char *name)
+static apr_status_t open_data_file(request_rec *r, apr_file_t **ppfh, 
+    const source_t &src)
 {
     static const char data_note_name[] = "MRF_DATA_FILE";
 
 #if defined(APR_FOPEN_RANDOM)
     // apr has portable support for random access to files
-    return open_connection_file(r, ppfh, name, open_flags | APR_FOPEN_RANDOM, data_note_name);
+    return open_connection_file(r, ppfh, src, open_flags | APR_FOPEN_RANDOM, 
+        data_note_name);
 #else
 
-    apr_status_t stat = open_connection_file(r, ppfh, name, open_flags, data_note_name);
+    apr_status_t stat = 
+        open_connection_file(r, ppfh, src, data_note_name, open_flags);
 
 #if !defined(POSIX_FADV_RANDOM)
     return stat;
@@ -580,16 +582,18 @@ static const source_t *get_source(const apr_array_header_t *sources, TIdx *index
 
 static const char *read_index(request_rec *r, TIdx *idx, apr_off_t offset) {
     mrf_conf *cfg = get_conf(r);
-
     apr_file_t *idxf;
-    if (open_index_file(r, &idxf, cfg->idx.fname))
-        return apr_psprintf(r->pool, "Can't open index %s", cfg->idx.fname);
+
+    if (open_connection_file(r, &idxf, cfg->idx, "MRF_INDEX_FILE"))
+        return apr_psprintf(r->pool,
+            "Can't open index %s", cfg->idx.fname);
 
     apr_size_t read_size = sizeof(TIdx);
     if (apr_file_seek(idxf, APR_SET, &offset)
         || apr_file_read(idxf, idx, &read_size)
         || read_size != sizeof(TIdx))
-        return apr_psprintf(r->pool, "Invalid read in %s", cfg->idx.fname);
+        return apr_psprintf(r->pool,
+            "%s : Read error", cfg->idx.fname);
 
     idx->offset = ntoh64(idx->offset);
     idx->size = ntoh64(idx->size);
@@ -599,14 +603,16 @@ static const char *read_index(request_rec *r, TIdx *idx, apr_off_t offset) {
 static int handler(request_rec *r)
 {
     // Only get and no arguments
-    if (r->args || r->method_number != M_GET) return DECLINED; // Don't accept arguments
+    if (r->args || r->method_number != M_GET)
+        return DECLINED;
 
     mrf_conf *cfg = get_conf(r);
     if (!cfg->enabled || (cfg->indirect && !r->main) || !our_request(r, cfg))
         return DECLINED;
 
     apr_array_header_t *tokens = tokenize(r->pool, r->uri, '/');
-    if (tokens->nelts < 3) return DECLINED; // At least Level Row Column
+    if (tokens->nelts < 3)
+        return DECLINED; // At least Level Row Column
 
     // Use a xyzc structure, with c being the level
     // Input order is M/Level/Row/Column, with M being optional
@@ -693,7 +699,8 @@ static int handler(request_rec *r)
         do {
             request_rec *sr = ap_sub_req_lookup_uri(src->redirect, r, r->output_filters);
             apr_table_setn(sr->headers_in, "Range", Range);
-            ap_filter_t *rf = ap_add_output_filter_handle(receive_filter, &rctx, sr, sr->connection);
+            ap_filter_t *rf = ap_add_output_filter_handle(receive_filter, &rctx, 
+                sr, sr->connection);
             int status = ap_run_sub_req(sr);
             ap_remove_output_filter(rf);
             ap_destroy_sub_req(sr);
@@ -712,7 +719,7 @@ static int handler(request_rec *r)
     else
     { // Read from a local file
         apr_file_t *dataf;
-        SERR_IF(open_data_file(r, &dataf, src->fname),
+        SERR_IF(open_data_file(r, &dataf, *src),
             apr_psprintf(r->pool, "Can't open %s", src->fname));
 
         // We got the tile index, and is not empty
