@@ -4,7 +4,7 @@
 * (C) 2016-2019
 */
 
-#include "mod_mrf.h"
+#include <ahtse.h>
 #include "receive_context.h"
 
 #include <algorithm>
@@ -17,6 +17,43 @@
 using namespace std;
 
 NS_AHTSE_USE
+
+struct mrf_conf {
+    // array of guard regexp, one of them has to match
+    apr_array_header_t *arr_rxp;
+    apr_array_header_t *source;
+    source_t idx;
+
+    // Forced mime-type, default is autodetected
+    char *mime_type;
+    // Full raster size in pixels
+    sz size;
+    // Page size in pixels
+    sz pagesize;
+
+    // Levels to skip at the top
+    int skip_levels;
+    int n_levels;
+    rset *rsets;
+
+    storage_manager empty;
+    apr_off_t eoffset;
+
+    // Turns the module functionality off
+    int enabled;
+    // If set, only secondary requests are allowed
+    int indirect;
+
+    // Used on remote data, how many times to try
+    int tries;
+
+    // ETag initializer
+    apr_uint64_t seed;
+    // Buffer for the emtpy tile etag
+    char eETag[16];
+};
+
+extern module AP_MODULE_DECLARE_DATA mrf_module;
 
 #if defined(APLOG_USE_MODULE)
 APLOG_USE_MODULE(mrf);
