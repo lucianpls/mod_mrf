@@ -1,7 +1,7 @@
 /*
 * An OnEarth module that serves tiles from an MRF
 * Lucian Plesea
-* (C) 2016-2018
+* (C) 2016-2019
 */
 
 #include "mod_mrf.h"
@@ -9,11 +9,17 @@
 
 #include <algorithm>
 #include <cmath>
+#include <http_log.h>
+#include <http_request.h>
+
+#define CMD_FUNC (cmd_func)
 
 using namespace std;
 
-#if APR_SUCCESS != 0
-#error "APR_SUCCESS is not null"
+NS_AHTSE_USE
+
+#if defined(APLOG_USE_MODULE)
+APLOG_USE_MODULE(mrf);
 #endif
 
 static inline void *create_dir_config(apr_pool_t *p, char *dummy)
@@ -29,21 +35,6 @@ static inline mrf_conf * get_conf(request_rec *r) {
     mrf_conf *cfg = (mrf_conf *)ap_get_module_config(r->request_config, &mrf_module);
     if (cfg) return cfg;
     return (mrf_conf *)ap_get_module_config(r->per_dir_config, &mrf_module);
-}
-
-//
-// Tokenize a string into an array
-//  
-static apr_array_header_t* tokenize(apr_pool_t *p, const char *s, char sep = '/')
-{
-    apr_array_header_t* arr = apr_array_make(p, 10, sizeof(char *));
-    while (sep == *s) s++;
-    char *val;
-    while (*s && (val = ap_getword(p, &s, sep))) {
-        char **newelt = (char **)apr_array_push(arr);
-        *newelt = val;
-    }
-    return arr;
 }
 
 // Returns a table read from a file, or NULL and an error message
@@ -82,7 +73,9 @@ static apr_table_t *read_pKVP_from_file(apr_pool_t *pool, const char *fname, cha
 }
 
 // Returns NULL if it worked as expected, returns a four integer value from "x y", "x y z" or "x y z c"
-static char *get_xyzc_size(apr_pool_t *p, struct sz *size, const char *value, const char*err_prefix) {
+static char *get_xyzc_size(apr_pool_t *p, sz *size, 
+    const char *value, const char*err_prefix)
+{
     char *s;
     if (!value)
         return apr_psprintf(p, "%s directive missing", err_prefix);
@@ -100,48 +93,13 @@ static char *get_xyzc_size(apr_pool_t *p, struct sz *size, const char *value, co
     return NULL;
 }
 
-// Converts a 64bit value into 13 trigesimal chars
-static void uint64tobase32(apr_uint64_t value, char *buffer, int flag = 0) {
-    static char b32digits[] = "0123456789abcdefghijklmnopqrstuv";
-    // From the bottom up
-    buffer[13] = 0; // End of string marker
-    for (int i = 0; i < 12; i++, value >>= 5)
-        buffer[12 - i] = b32digits[value & 0x1f];
-    // First char holds the empty tile flag
-    if (flag) flag = 0x10; // Making sure it has the right value
-    buffer[0] = b32digits[flag | value];
-}
-
-// Return the value from a base 32 character
-// Returns a negative value if char is not a valid base32 char
-static int b32(char ic) {
-    int c = 0xff & (static_cast<int>(ic));
-    if (c < '0') return -1;
-    if (c - '0' < 10) return c - '0';
-    if (c < 'A') return -1;
-    if (c - 'A' < 22) return c - 'A' + 10;
-    if (c < 'a') return -1;
-    if (c - 'a' < 22) return c - 'a' + 10;
-    return -1;
-}
-
-static apr_uint64_t base32decode(const char *is, int *flag) {
-    apr_int64_t value = 0;
-    const unsigned char *s = reinterpret_cast<const unsigned char *>(is);
-    while (*s == '"') s++; // Skip initial quotes
-    *flag = (b32(*s) >> 4) & 1; // Pick up the flag from bit 5
-    for (int v = b32(*s++) & 0xf; v >= 0; v = b32(*s++))
-        value = (value << 5) + v;
-    return value;
-}
-
 static void mrf_init(apr_pool_t *p, mrf_conf *c) {
-    struct rset level;
-    level.width = static_cast<int>(1 + (c->size.x - 1) / c->pagesize.x);
-    level.height = static_cast<int>(1 + (c->size.y - 1) / c->pagesize.y);
+    rset level;
+    level.w = static_cast<int>(1 + (c->size.x - 1) / c->pagesize.x);
+    level.h = static_cast<int>(1 + (c->size.y - 1) / c->pagesize.y);
     level.offset = 0;
     // How many levels do we have
-    c->n_levels = 2 + ilogb(max(level.height, level.width) - 1);
+    c->n_levels = 2 + ilogb(max(level.h, level.w) - 1);
     c->rsets = (struct rset *)apr_pcalloc(p, sizeof(rset) * c->n_levels);
 
     // Populate rsets from the bottom, the way tile protcols count levels
@@ -153,12 +111,12 @@ static void mrf_init(apr_pool_t *p, mrf_conf *c) {
         // This is safe on all platforms that have large files (64bit signed offset)
         // It will start failing if the file offset is larger than 63bits
         // The c->size.z has to be first, to force the 64bit type
-        level.offset += c->size.z * level.width * level.height * sizeof(TIdx);
-        level.width = 1 + (level.width - 1) / 2;
-        level.height = 1 + (level.height - 1) / 2;
+        level.offset += c->size.z * level.w * level.h * sizeof(range_t);
+        level.w = 1 + (level.w - 1) / 2;
+        level.h = 1 + (level.h - 1) / 2;
     }
     // MRF has one tile at the top
-    ap_assert(c->rsets->height == 1 && c->rsets->width == 1);
+    ap_assert(c->rsets->h == 1 && c->rsets->w == 1);
 }
 
 // Allow for one or more RegExp guard
@@ -340,7 +298,7 @@ static const char *mrf_file_set(cmd_parms *cmd, void *dconf, const char *arg)
     if (line) {
         char *last;
         // Try to read a figure first
-        c->esize = apr_strtoi64(line, &last, 0);
+        c->empty.size = (int)apr_strtoi64(line, &last, 0);
 
         // If that worked, try to get an offset too
         if (last != line)
@@ -353,31 +311,32 @@ static const char *mrf_file_set(cmd_parms *cmd, void *dconf, const char *arg)
     }
 
     // If we're provided a file name or a size, pre-read the empty tile in the
-    if (efname && (datafname == NULL || apr_strnatcmp(datafname, efname) || c->esize))
+    if (efname && 
+        (datafname == NULL || apr_strnatcmp(datafname, efname) || c->empty.size))
     {
         apr_file_t *efile;
         apr_off_t offset = c->eoffset;
         apr_status_t stat;
 
         // Use the temp pool for the file open, it will close it for us
-        if (!c->esize) { // Don't know the size, get it from the file
+        if (!c->empty.size) { // Don't know the size, get it from the file
             apr_finfo_t finfo;
             stat = apr_stat(&finfo, efname, APR_FINFO_CSIZE, cmd->temp_pool);
             if (APR_SUCCESS != stat)
                 return apr_psprintf(cmd->pool, "Can't stat %s %pm", efname, &stat);
-            c->esize = (apr_uint64_t)finfo.csize;
+            c->empty.size = (int)finfo.csize;
         }
 
         stat = apr_file_open(&efile, efname, APR_FOPEN_READ | APR_FOPEN_BINARY, 0, cmd->temp_pool);
         if (APR_SUCCESS != stat)
             return apr_psprintf(cmd->pool, "Can't open empty file %s, loaded from %s: %pm",
             efname, arg, &stat);
-        c->empty = (apr_uint32_t *)apr_palloc(cmd->pool, static_cast<apr_size_t>(c->esize));
+        c->empty.buffer = (char *)apr_palloc(cmd->pool, static_cast<apr_size_t>(c->empty.size));
         stat = apr_file_seek(efile, APR_SET, &offset);
         if (APR_SUCCESS != stat)
             return apr_psprintf(cmd->pool, "Can't seek empty tile %s: %pm", efname, &stat);
-        apr_size_t size = (apr_size_t)c->esize;
-        stat = apr_file_read(efile, c->empty, &size);
+        apr_size_t size = c->empty.size;
+        stat = apr_file_read(efile, (void *)c->empty.buffer, &size);
         if (APR_SUCCESS != stat)
             return apr_psprintf(cmd->pool, "Can't read from %s, loaded from %s: %pm",
             efname, arg, &stat);
@@ -389,7 +348,7 @@ static const char *mrf_file_set(cmd_parms *cmd, void *dconf, const char *arg)
     int flag;
     c->seed = line ? base32decode(line, &flag) : 0;
     // Set the missing tile etag, with the extra bit set
-    uint64tobase32(c->seed, c->eETag, 1);
+    tobase32(c->seed, c->eETag, 1);
 
     // Set the index file name based on the first data file, if there is only one
     if (!c->idx.fname) {
@@ -414,49 +373,6 @@ static int etag_matches(request_rec *r, const char *ETag) {
     return ETagIn != 0 && strstr(ETagIn, ETag);
 }
 
-static int send_image(request_rec *r, apr_uint32_t *buffer, apr_size_t size)
-{
-    mrf_conf *cfg = get_conf(r);
-    if (cfg->mime_type)
-        ap_set_content_type(r, cfg->mime_type);
-    else
-        switch (hton32(*buffer)) {
-        case JPEG_SIG:
-            ap_set_content_type(r, "image/jpeg");
-            break;
-        case PNG_SIG:
-            ap_set_content_type(r, "image/png");
-            break;
-        default: // LERC goes here too
-            ap_set_content_type(r, "application/octet-stream");
-    }
-
-    // Is it gzipped content?
-    if (GZIP_SIG == hton32(*buffer)) {
-        apr_table_setn(r->headers_out, "Content-Encoding", "gzip");
-        const char *ae = apr_table_get(r->headers_in, "Accept-Encoding");
-        // If accept encoding is missing, assume it doesn't support gzip
-        if (!ae || !strstr(ae, "gzip")) {
-            ap_filter_rec_t *inflate_filter = ap_get_output_filter_handle("INFLATE");
-            if (inflate_filter)
-                ap_add_output_filter_handle(inflate_filter, NULL, r, r->connection);
-            else
-                ap_log_rerror(APLOG_MARK, APLOG_WARNING, 0, r,
-                    "mod_deflate not loaded, sending gzipped tile to client that does not declare support");
-        }
-    }
-
-    //
-    // Static headers can be added with the header module
-    // apr_table_setn(r->headers_out, "Access-Control-Allow-Origin", "*");
-    // apt_table_setn(r->headers_out, "Cache-Control", "max-age=86400");
-    //
-
-    ap_set_content_length(r, size);
-    ap_rwrite(buffer, static_cast<int>(size), r);
-    return OK;
-}
-
 // Returns the empty tile if defined
 static int send_empty_tile(request_rec *r) {
     mrf_conf *cfg = get_conf(r);
@@ -465,8 +381,9 @@ static int send_empty_tile(request_rec *r) {
         return HTTP_NOT_MODIFIED;
     }
 
-    if (!cfg->empty) return DECLINED; // Passthrough
-    return send_image(r, cfg->empty, static_cast<apr_size_t>(cfg->esize));
+    if (!cfg->empty.buffer)
+        return DECLINED; // Passthrough
+    return sendImage(r, cfg->empty);
 }
 
 // An open file handle and the matching file name, to be used as a note
@@ -565,7 +482,7 @@ static bool our_request(request_rec *r, mrf_conf *cfg) {
 }
 
 // Return the first source which contains the index, adjusts the index offset if necessary
-static const source_t *get_source(const apr_array_header_t *sources, TIdx *index) {
+static const source_t *get_source(const apr_array_header_t *sources, range_t *index) {
     for (int i = 0; i < sources->nelts; i++) {
         source_t *source = &APR_ARRAY_IDX(sources, i, source_t);
         if ((source->range.offset == 0 && source->range.size == 0)
@@ -580,7 +497,7 @@ static const source_t *get_source(const apr_array_header_t *sources, TIdx *index
     return NULL;
 }
 
-static const char *read_index(request_rec *r, TIdx *idx, apr_off_t offset) {
+static const char *read_index(request_rec *r, range_t *idx, apr_off_t offset) {
     mrf_conf *cfg = get_conf(r);
     apr_file_t *idxf;
 
@@ -588,15 +505,15 @@ static const char *read_index(request_rec *r, TIdx *idx, apr_off_t offset) {
         return apr_psprintf(r->pool,
             "Can't open index %s", cfg->idx.fname);
 
-    apr_size_t read_size = sizeof(TIdx);
+    apr_size_t read_size = sizeof(range_t);
     if (apr_file_seek(idxf, APR_SET, &offset)
         || apr_file_read(idxf, idx, &read_size)
-        || read_size != sizeof(TIdx))
+        || read_size != sizeof(range_t))
         return apr_psprintf(r->pool,
             "%s : Read error", cfg->idx.fname);
 
-    idx->offset = ntoh64(idx->offset);
-    idx->size = ntoh64(idx->size);
+    idx->offset = be64toh(idx->offset);
+    idx->size = be64toh(idx->size);
     return nullptr;
 }
 
@@ -637,13 +554,13 @@ static int handler(request_rec *r)
     // Check for bad requests, outside of the defined bounds
     REQ_ERR_IF(tile.l >= cfg->n_levels);
     rset *level = cfg->rsets + tile.l;
-    REQ_ERR_IF(tile.x >= level->width || tile.y >= level->height);
+    REQ_ERR_IF(tile.x >= level->w || tile.y >= level->h);
 
     // Offset of the index entry for this tile
     apr_off_t tidx_offset = level->offset +
-        sizeof(TIdx) * (tile.x + level->width * (tile.z * level->height + tile.y));
+        sizeof(range_t) * (tile.x + level->w * (tile.z * level->h + tile.y));
 
-    TIdx index;
+    range_t index;
     const char *message;
     SERR_IF((message = read_index(r, &index, tidx_offset)),
         message);
@@ -661,7 +578,7 @@ static int handler(request_rec *r)
     // Check for conditional ETag here, no need to get the data
     char ETag[16];
     // Try to distribute the bits a bit to generate an ETag
-    uint64tobase32(cfg->seed ^ (index.size << 40) ^ index.offset, ETag);
+    tobase32(cfg->seed ^ (index.size << 40) ^ index.offset, ETag);
     if (etag_matches(r, ETag)) {
         apr_table_set(r->headers_out, "ETag", ETag);
         return HTTP_NOT_MODIFIED;
@@ -733,7 +650,8 @@ static int handler(request_rec *r)
 
     // Looks fine, set the outgoing etag and then the image
     apr_table_set(r->headers_out, "ETag", ETag);
-    return send_image(r, buffer, static_cast<apr_size_t>(index.size));
+    storage_manager temp = { (char *)buffer, static_cast<int>(index.size) };
+    return sendImage(r, temp);
 }
 
 static const command_rec mrf_cmds[] =
