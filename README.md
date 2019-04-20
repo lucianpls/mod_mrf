@@ -55,9 +55,6 @@ AHTSE Control Directives for this module are:
   Otherwise it uses the first data file name with the extension changed to .idx
   It can be a redirect path in the host namespace, if it starts with a colon :
  
-***MimeType string***
- - Optional, defaults to autodetect.
-
 ***EmptyTile Size Offset FileName***
  - Optional, provides the tile content to be sent when the requested tile is missing. By default the request is ignored, which results in a 404 error if a fallback mechanism does not exist.  if present, the first number is assumed to be the size, second is offset. If filename is not given, the first data file name is used.
 

@@ -26,9 +26,6 @@ struct mrf_conf {
 
     TiledRaster raster;
 
-    // Forced mime-type, default is autodetected
-    char *mime_type;
-
     // Turns the module functionality off
     int enabled;
     // If set, only secondary requests are allowed
@@ -144,11 +141,6 @@ static const char *mrf_file_set(cmd_parms *cmd, void *dconf, const char *arg)
     // Index file can also be provided, there could be a default
     line = apr_table_get(kvp, "IndexFile");
     c->idx.name = apr_pstrdup(cmd->pool, line);
-
-    // Mime type is autodetected if not provided
-    line = apr_table_get(kvp, "MimeType");
-    if (line)
-        c->mime_type = apr_pstrdup(cmd->pool, line);
 
     // If an emtpy tile is not provided, it falls through, which results in a 404 error
     // If provided, it has an optional size and offset followed by file name which 
