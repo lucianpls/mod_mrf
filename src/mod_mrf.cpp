@@ -24,20 +24,10 @@ struct mrf_conf {
     apr_array_header_t *source;
     vfile_t idx;
 
+    TiledRaster raster;
+
     // Forced mime-type, default is autodetected
     char *mime_type;
-    // Full raster size in pixels
-    sz size;
-    // Page size in pixels
-    sz pagesize;
-
-    // Levels to skip at the top
-    int skip_levels;
-    int n_levels;
-    rset *rsets;
-
-    empty_conf_t empty;
-    apr_off_t eoffset;
 
     // Turns the module functionality off
     int enabled;
@@ -46,11 +36,6 @@ struct mrf_conf {
 
     // Used on remote data, how many times to try
     int tries;
-
-    // ETag initializer
-    apr_uint64_t seed;
-    // Buffer for the emtpy tile etag
-    char eETag[16];
 };
 
 extern module AP_MODULE_DECLARE_DATA mrf_module;
@@ -88,43 +73,10 @@ static char *get_xyzc_size(apr_pool_t *p, sz *size,
     return NULL;
 }
 
-static void mrf_init(apr_pool_t *p, mrf_conf *c) {
-    rset level;
-    level.w = static_cast<int>(1 + (c->size.x - 1) / c->pagesize.x);
-    level.h = static_cast<int>(1 + (c->size.y - 1) / c->pagesize.y);
-    level.offset = 0;
-    // How many levels do we have
-    c->n_levels = 2 + ilogb(max(level.h, level.w) - 1);
-    c->rsets = (struct rset *)apr_pcalloc(p, sizeof(rset) * c->n_levels);
-
-    // Populate rsets from the bottom, the way tile protcols count levels
-    // These are MRF rsets, not all of them are visible
-    struct rset *r = c->rsets + c->n_levels - 1;
-    for (int i = 0; i < c->n_levels; i++) {
-        *r-- = level;
-        // Prepare for the next level, assuming powers of two
-        // This is safe on all platforms that have large files (64bit signed offset)
-        // It will start failing if the file offset is larger than 63bits
-        // The c->size.z has to be first, to force the 64bit type
-        level.offset += c->size.z * level.w * level.h * sizeof(range_t);
-        level.w = 1 + (level.w - 1) / 2;
-        level.h = 1 + (level.h - 1) / 2;
-    }
-    // MRF has one tile at the top
-    ap_assert(c->rsets->h == 1 && c->rsets->w == 1);
-}
-
-// Allow for one or more RegExp guard
-// If present, at least one of them has to match the URL
 static const char *set_regexp(cmd_parms *cmd, mrf_conf *c, 
     const char *pattern)
 {
-    // char *err_message = NULL;
-    if (c->arr_rxp == 0)
-        c->arr_rxp = apr_array_make(cmd->pool, 2, sizeof(ap_regex_t *));
-    ap_regex_t **m = (ap_regex_t **)apr_array_push(c->arr_rxp);
-    *m = ap_pregcomp(cmd->pool, pattern, 0);
-    return (nullptr != *m) ? nullptr : "Bad regular expression";
+    return add_regexp_to_array(cmd->pool, &c->arr_rxp, pattern);
 }
 
 // Parse a comma separated list of sources, add the entries to the array arr
@@ -163,39 +115,18 @@ static const char *mrf_file_set(cmd_parms *cmd, void *dconf, const char *arg)
     mrf_conf *c = (mrf_conf *)dconf;
     const char *err_message;
     apr_table_t *kvp = readAHTSEConfig(cmd->temp_pool, arg, &err_message);
-    if (NULL == kvp) return err_message;
+    if (NULL == kvp)
+        return err_message;
+
+    err_message = configRaster(cmd->pool, kvp, c->raster);
+    if (err_message)
+        return err_message;
 
     // Got the parsed kvp table, parse the configuration items
     const char *line;
-    char *err_prefix;
+    c->source = apr_array_make(cmd->pool, 1, sizeof(vfile_t));
 
-    line = apr_table_get(kvp, "Size");
-    if (!line)
-        return apr_psprintf(cmd->temp_pool, "%s Size directive is mandatory", arg);
-    err_prefix = apr_psprintf(cmd->temp_pool, "%s Size", arg);
-    err_message = get_xyzc_size(cmd->temp_pool, &(c->size), line, err_prefix);
-    if (err_message) return err_message;
-
-    // PageSize is optional, use reasonable defaults
-    c->pagesize.x = c->pagesize.z = 512;
-    c->pagesize.c = c->size.c;
-    c->pagesize.z = 1;
-    line = apr_table_get(kvp, "PageSize");
-    if (line) {
-        err_prefix = apr_psprintf(cmd->temp_pool, "%s PageSize", arg);
-        err_message = get_xyzc_size(cmd->temp_pool, &(c->pagesize), line, err_prefix);
-        if (err_message) return err_message;
-    }
-    if (c->pagesize.c != c->size.c || c->pagesize.z != 1)
-        return apr_psprintf(cmd->temp_pool, "%s PageSize has invalid parameters", arg);
-
-    // Initialize the run-time structures
-    mrf_init(cmd->pool, c);
-
-    if (!c->source)
-        c->source = apr_array_make(cmd->pool, 1, sizeof(vfile_t));
-
-    // The DataFile is alternative with Redirect
+    // The DataFile, multiple times, includes redirects
     if ((NULL != (line = apr_table_getm(cmd->temp_pool, kvp, "DataFile"))) &&
         (NULL != (line = parse_sources(cmd, line, c->source))))
         return line;
@@ -219,11 +150,6 @@ static const char *mrf_file_set(cmd_parms *cmd, void *dconf, const char *arg)
     if (line)
         c->mime_type = apr_pstrdup(cmd->pool, line);
 
-    // Skip levels, from the top of the MRF
-    line = apr_table_get(kvp, "SkippedLevels");
-    if (line)
-        c->skip_levels = atoi(line);
-
     // If an emtpy tile is not provided, it falls through, which results in a 404 error
     // If provided, it has an optional size and offset followed by file name which 
     // defaults to datafile read the empty tile
@@ -235,61 +161,8 @@ static const char *mrf_file_set(cmd_parms *cmd, void *dconf, const char *arg)
 
     const char *efname = datafname;
     line = apr_table_get(kvp, "EmptyTile");
-    if (line) {
-        char *last;
-        // Try to read a figure first
-        c->empty.empty.size = (int)apr_strtoi64(line, &last, 0);
-
-        // If that worked, try to get an offset too
-        if (last != line)
-            apr_strtoff(&(c->eoffset), last, &last, 0);
-
-        // If there is anything left
-        while (*last && isspace(*last)) last++;
-        if (*last != 0)
-            efname = last;
-    }
-
-    // If we're provided a file name or a size, pre-read the empty tile in the
-    if (efname && 
-        (datafname == NULL || apr_strnatcmp(datafname, efname) || c->empty.empty.size))
-    {
-        apr_file_t *efile;
-        apr_off_t offset = c->eoffset;
-        apr_status_t stat;
-
-        // Use the temp pool for the file open, it will close it for us
-        if (!c->empty.empty.size) { // Don't know the size, get it from the file
-            apr_finfo_t finfo;
-            stat = apr_stat(&finfo, efname, APR_FINFO_CSIZE, cmd->temp_pool);
-            if (APR_SUCCESS != stat)
-                return apr_psprintf(cmd->pool, "Can't stat %s %pm", efname, &stat);
-            c->empty.empty.size = (int)finfo.csize;
-        }
-
-        stat = apr_file_open(&efile, efname, APR_FOPEN_READ | APR_FOPEN_BINARY, 0, cmd->temp_pool);
-        if (APR_SUCCESS != stat)
-            return apr_psprintf(cmd->pool, "Can't open empty file %s, loaded from %s: %pm",
-            efname, arg, &stat);
-        c->empty.empty.buffer = reinterpret_cast<char *>(apr_palloc(cmd->pool, 
-            static_cast<apr_size_t>(c->empty.empty.size)));
-        stat = apr_file_seek(efile, APR_SET, &offset);
-        if (APR_SUCCESS != stat)
-            return apr_psprintf(cmd->pool, "Can't seek empty tile %s: %pm", efname, &stat);
-        apr_size_t size = c->empty.empty.size;
-        stat = apr_file_read(efile, c->empty.empty.buffer, &size);
-        if (APR_SUCCESS != stat)
-            return apr_psprintf(cmd->pool, "Can't read from %s, loaded from %s: %pm",
-            efname, arg, &stat);
-        apr_file_close(efile);
-    }
-
-    line = apr_table_get(kvp, "ETagSeed");
-    // Ignore the flag
-    int flag;
-    c->seed = line ? base32decode(line, &flag) : 0;
-    // Set the missing tile etag, with the extra bit set
-    tobase32(c->seed, c->eETag, 1);
+    if (line && strlen(line) && (err_message = readFile(cmd->pool, c->raster.missing.empty, line)))
+       return err_message;
 
     // Set the index file name based on the first data file, if there is only one
     if (!c->idx.name) {
@@ -452,19 +325,21 @@ static int handler(request_rec *r)
     tile.y = apr_atoi64(*(char **)apr_array_pop(tokens)); REQ_ERR_IF(errno);
     tile.l = apr_atoi64(*(char **)apr_array_pop(tokens)); REQ_ERR_IF(errno);
 
+    const TiledRaster &raster(cfg->raster);
+
     // We can ignore the error on this one, defaults to zero
     // The parameter before the level can't start with a digit for an extra-dimensional MRF
-    if (cfg->size.z != 1 && tokens->nelts)
+    if (raster.size.z != 1 && tokens->nelts)
         tile.z = apr_atoi64(*(char **)apr_array_pop(tokens));
 
     // Don't allow access to levels less than zero, send the empty tile instead
     if (tile.l < 0)
-        return sendEmptyTile(r, cfg->empty);
+        return sendEmptyTile(r, raster.missing);
 
-    tile.l += cfg->skip_levels;
+    tile.l += raster.skip;
     // Check for bad requests, outside of the defined bounds
-    REQ_ERR_IF(tile.l >= cfg->n_levels);
-    rset *level = cfg->rsets + tile.l;
+    REQ_ERR_IF(tile.l >= raster.n_levels);
+    rset *level = raster.rsets + tile.l;
     REQ_ERR_IF(tile.x >= level->w || tile.y >= level->h);
 
     // Offset of the index entry for this tile
@@ -478,7 +353,7 @@ static int handler(request_rec *r)
 
     // MRF index record is in network order
     if (index.size < 4) // Need at least four bytes for signature check
-        return sendEmptyTile(r, cfg->empty);
+        return sendEmptyTile(r, raster.missing);
 
     if (MAX_TILE_SIZE < index.size) { // Tile is too large, log and send error code
         ap_log_error(APLOG_MARK, APLOG_ERR, 0, r->server, "Tile too large in %s", 
@@ -489,7 +364,7 @@ static int handler(request_rec *r)
     // Check for conditional ETag here, no need to get the data
     char ETag[16];
     // Try to distribute the bits a bit to generate an ETag
-    tobase32(cfg->seed ^ (index.size << 40) ^ index.offset, ETag);
+    tobase32(raster.seed ^ (index.size << 40) ^ index.offset, ETag);
     if (etagMatches(r, ETag)) {
         apr_table_set(r->headers_out, "ETag", ETag);
         return HTTP_NOT_MODIFIED;
