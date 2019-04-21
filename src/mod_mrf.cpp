@@ -15,7 +15,6 @@
 #define CMD_FUNC (cmd_func)
 
 using namespace std;
-
 NS_AHTSE_USE
 
 struct mrf_conf {
@@ -47,27 +46,6 @@ static inline void *create_dir_config(apr_pool_t *p, char *dummy)
         (mrf_conf *)apr_pcalloc(p, sizeof(mrf_conf));
     c->tries = 5;
     return c;
-}
-
-// Returns NULL if it worked as expected, returns a four integer value from "x y", "x y z" or "x y z c"
-static char *get_xyzc_size(apr_pool_t *p, sz *size, 
-    const char *value, const char*err_prefix)
-{
-    char *s;
-    if (!value)
-        return apr_psprintf(p, "%s directive missing", err_prefix);
-    size->x = apr_strtoi64(value, &s, 0);
-    size->y = apr_strtoi64(s, &s, 0);
-    size->c = 3;
-    size->z = 1;
-    if (errno == 0 && *s) { // Read optional third and fourth integers
-        size->z = apr_strtoi64(s, &s, 0);
-        if (*s)
-            size->c = apr_strtoi64(s, &s, 0);
-    } // Raster size is 4 params max
-    if (errno || *s)
-        return apr_psprintf(p, "%s incorrect", err_prefix);
-    return NULL;
 }
 
 static const char *set_regexp(cmd_parms *cmd, mrf_conf *c, 
