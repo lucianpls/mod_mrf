@@ -20,18 +20,19 @@ NS_AHTSE_USE
 struct mrf_conf {
     // array of guard regexp, one of them has to match
     apr_array_header_t *arr_rxp;
-    apr_array_header_t *source;
-    vfile_t idx;
-
     TiledRaster raster;
 
-    // Turns the module functionality off
-    int enabled;
+    // At least one source, but there could be more
+    apr_array_header_t *source;
+
+    // The MRF index file
+    vfile_t idx;
+
+    // Used for redirect, how many times to try
+    int tries;
+
     // If set, only secondary requests are allowed
     int indirect;
-
-    // Used on remote data, how many times to try
-    int tries;
 };
 
 extern module AP_MODULE_DECLARE_DATA mrf_module;
@@ -148,7 +149,6 @@ static const char *mrf_file_set(cmd_parms *cmd, void *dconf, const char *arg)
             memcpy(token, "idx", 3);
     }
 
-    c->enabled = 1;
     return NULL;
 }
 
@@ -278,7 +278,7 @@ static int handler(request_rec *r)
         return DECLINED;
 
     auto cfg = get_conf<mrf_conf>(r, &mrf_module);
-    if (!cfg->enabled || (cfg->indirect && !r->main) || !requestMatches(r, cfg->arr_rxp))
+    if ((cfg->indirect && !r->main) || !requestMatches(r, cfg->arr_rxp))
         return DECLINED;
 
     apr_array_header_t *tokens = tokenize(r->pool, r->uri, '/');
@@ -346,13 +346,14 @@ static int handler(request_rec *r)
     if (!name)
         SERR_IF(true, apr_psprintf(r->pool, "No data file configured for %s", r->uri));
 
-    bool redirect = (strlen(name) > 2 && name[0] == ':' && name[1] == '/');
-
     apr_uint32_t *buffer = static_cast<apr_uint32_t *>(
         apr_palloc(r->pool, static_cast<apr_size_t>(index.size)));
     SERR_IF(!buffer,
         "Memory allocation error in mod_mrf");
 
+    // A name starting with :// is a redirect.  The last / will be preserved, so the 
+    // redirect path is absolute within this host
+    bool redirect = (strlen(name) > 3 && name[0] == ':' && name[1] == '/' && name[2] == '/');
     if (redirect) {
         const char *new_uri = name + 2; // Skip the :/
         // TODO: S3 authorized requests
@@ -386,7 +387,7 @@ static int handler(request_rec *r)
             && (0 == tries--))
             { // Abort here
                 ap_log_rerror(APLOG_MARK, APLOG_ERR, 0, r, 
-                    "Can't fetch data from %s, took us %" APR_TIME_T_FMT,
+                    "Can't fetch data from %s, took %" APR_TIME_T_FMT "us",
                     new_uri, apr_time_now() - now);
                 return HTTP_SERVICE_UNAVAILABLE;
             }
@@ -415,14 +416,6 @@ static int handler(request_rec *r)
 
 static const command_rec mrf_cmds[] =
 {
-    AP_INIT_FLAG(
-    "MRF",
-    CMD_FUNC ap_set_flag_slot,
-    (void *)APR_OFFSETOF(mrf_conf, enabled),
-    ACCESS_CONF,
-    "mod_mrf enable, defaults to on if configuration is provided"
-    ),
-
     AP_INIT_FLAG(
     "MRF_Indirect",
     CMD_FUNC ap_set_flag_slot,
