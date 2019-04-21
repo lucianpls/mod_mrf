@@ -67,8 +67,14 @@ static const char *parse_sources(cmd_parms *cmd, const char *src,
         char *input = APR_ARRAY_IDX(inputs, i, char *);
 
         char *fname = ap_getword_white_nc(arr->pool, &input);
-        if (!fname)
+        if (!fname || strlen(fname) < 1)
             return "Missing source name";
+
+        if (redir) { // Check that it is absolute and add :/
+            if (fname[0] != '/')
+                return "Only absolute paths are allowed for Redirect";
+            fname = apr_pstrcat(arr->pool, ":/", fname, NULL);
+        }
 
         entry->name = fname;
 
