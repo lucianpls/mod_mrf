@@ -85,7 +85,7 @@ static const char *parse_redirects(cmd_parms *cmd, const char *src,
     return parse_sources(cmd, src, arr, true);
 }
 
-static const char *mrf_file_set(cmd_parms *cmd, void *dconf, const char *arg)
+static const char *file_set(cmd_parms *cmd, void *dconf, const char *arg)
 {
     ap_assert(sizeof(apr_off_t) == 8);
     mrf_conf *c = (mrf_conf *)dconf;
@@ -414,7 +414,7 @@ static int handler(request_rec *r)
     return sendImage(r, temp);
 }
 
-static const command_rec mrf_cmds[] =
+static const command_rec cmds[] =
 {
     AP_INIT_FLAG(
     "MRF_Indirect",
@@ -434,7 +434,7 @@ static const command_rec mrf_cmds[] =
 
     AP_INIT_TAKE1(
     "MRF_ConfigurationFile",
-    CMD_FUNC mrf_file_set, // Callback
+    CMD_FUNC file_set, // Callback
     0, // Self-pass argument
     ACCESS_CONF, // availability
     "The configuration file for this module"
@@ -443,7 +443,7 @@ static const command_rec mrf_cmds[] =
     { NULL }
 };
 
-static void mrf_register_hooks(apr_pool_t *p) {
+static void register_hooks(apr_pool_t *p) {
     ap_hook_handler(handler, NULL, NULL, APR_HOOK_FIRST);
 }
 
@@ -453,6 +453,6 @@ module AP_MODULE_DECLARE_DATA mrf_module = {
     0, // No dir_merge
     0, // No server_config
     0, // No server_merge
-    mrf_cmds, // configuration directives
-    mrf_register_hooks // processing hooks
+    cmds, // configuration directives
+    register_hooks // processing hooks
 };
