@@ -72,7 +72,8 @@ static const char *parse_sources(cmd_parms *cmd, const char *src,
 
         if (redir) { // Check that it is absolute and add :/
             if (fname[0] != '/')
-                return "Only absolute paths are allowed for Redirect";
+                return apr_pstrcat(cmd->pool, "Only absolute redirects as allowed, ",
+                    fname, " is not absolute", NULL);
             fname = apr_pstrcat(arr->pool, ":/", fname, NULL);
         }
 
