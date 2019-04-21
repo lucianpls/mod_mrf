@@ -1,7 +1,7 @@
 # mod_mrf [AHTSE](https://github.com/lucianpls/AHTSE)
 
 An apache module that serves tiles directly from a local MRF, 2D or 3D. 
-This module takes two apache configuration directives:
+Apache configuration directives:
 
 **MRF On|Off**
  
