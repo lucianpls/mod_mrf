@@ -259,7 +259,7 @@ static const vfile_t *pick_source(const apr_array_header_t *sources, range_t *in
 }
 
 // Like pread, except not really thread safe
-static int vfile_pread(request_rec *r, void *ptr, int size, off_t offset, const vfile_t *fh) {
+static int vfile_pread(request_rec *r, void *ptr, int size, apr_off_t offset, const vfile_t *fh) {
     auto  cfg = get_conf<mrf_conf>(r, &mrf_module);
     const char *name = fh->name;
 
@@ -345,24 +345,17 @@ static int vfile_pread(request_rec *r, void *ptr, int size, off_t offset, const 
     return sz;
 }
 
+// Indirect read of index
 static const char *read_index(request_rec *r, range_t *idx, apr_off_t offset) {
     auto  cfg = get_conf<mrf_conf>(r, &mrf_module);
-    apr_file_t *idxf;
+    static int size = sizeof(range_t);
 
-    if (open_connection_file(r, &idxf, cfg->idx, "MRF_INDEX_FILE"))
-        return apr_psprintf(r->pool,
-            "Can't open index %s", cfg->idx.name);
-
-    apr_size_t read_size = sizeof(range_t);
-    if (apr_file_seek(idxf, APR_SET, &offset)
-        || apr_file_read(idxf, idx, &read_size)
-        || read_size != sizeof(range_t))
-        return apr_psprintf(r->pool,
-            "%s : Read error", cfg->idx.name);
+    if (size != vfile_pread(r, idx, size, offset, &cfg->idx))
+        return "Read error";
 
     idx->offset = be64toh(idx->offset);
     idx->size = be64toh(idx->size);
-    return nullptr;
+    return nullptr; // Success
 }
 
 static int handler(request_rec *r)
@@ -444,63 +437,10 @@ static int handler(request_rec *r)
         apr_palloc(r->pool, static_cast<apr_size_t>(index.size)));
     SERR_IF(!buffer,
         "Memory allocation error in mod_mrf");
-
-    // A name starting with :// is a redirect.  The last / will be preserved, so the 
-    // redirect path is absolute within this host
-    bool redirect = (strlen(name) > 3 && name[0] == ':' && name[1] == '/' && name[2] == '/');
-    if (redirect) {
-        const char *new_uri = name + 2; // Skip the :/
-        // TODO: S3 authorized requests
-        ap_filter_rec_t *receive_filter = ap_get_output_filter_handle("Receive");
-        SERR_IF(!receive_filter, "Using redirect requires mod_receive");
-
-        // Get a buffer for the received image
-        receive_ctx rctx;
-        rctx.buffer = reinterpret_cast<char *>(buffer);
-        rctx.maxsize = static_cast<int>(index.size);
-        rctx.size = 0;
-
-        // Data file is on a remote site a range request redirect with a range header
-        char *Range = apr_psprintf(r->pool, "bytes=%" APR_UINT64_T_FMT "-%" APR_UINT64_T_FMT,
-            index.offset, index.offset + index.size);
-
-        // S3 may return less than requested, so we retry the request a couple of times
-        int tries = cfg->tries;
-        apr_time_t now = apr_time_now();
-        do {
-            request_rec *sr = ap_sub_req_lookup_uri(new_uri, r, r->output_filters);
-            apr_table_setn(sr->headers_in, "Range", Range);
-            ap_filter_t *rf = ap_add_output_filter_handle(receive_filter, &rctx, 
-                sr, sr->connection);
-            int status = ap_run_sub_req(sr);
-            ap_remove_output_filter(rf);
-            ap_destroy_sub_req(sr);
-
-            if ((status != APR_SUCCESS || sr->status != HTTP_PARTIAL_CONTENT
-                || rctx.size != static_cast<int>(index.size))
-            && (0 == tries--))
-            { // Abort here
-                ap_log_rerror(APLOG_MARK, APLOG_ERR, 0, r, 
-                    "Can't fetch data from %s, took %" APR_TIME_T_FMT "us",
-                    new_uri, apr_time_now() - now);
-                return HTTP_SERVICE_UNAVAILABLE;
-            }
-        } while (rctx.size != static_cast<int>(index.size));
-    }
-    else
-    { // Read from a local file
-        apr_file_t *dataf;
-        SERR_IF(open_data_file(r, &dataf, *src),
-            apr_psprintf(r->pool, "Can't open %s", name));
-
-        // We got the tile index, and is not empty
-        SERR_IF(apr_file_seek(dataf, APR_SET, (apr_off_t *)&index.offset),
-            apr_psprintf(r->pool, "Seek error in %s", name));
-
-        apr_size_t read_size = static_cast<apr_size_t>(index.size);
-        SERR_IF(apr_file_read(dataf, buffer, &read_size) || read_size != index.size,
-            apr_psprintf(r->pool, "Can't read from %s", name));
-    }
+    
+    int size = static_cast<int>(index.size);
+    SERR_IF(size != vfile_pread(r, buffer, size, index.offset, src),
+        "Data read error");
 
     // Looks fine, set the outgoing etag and then the image
     apr_table_set(r->headers_out, "ETag", ETag);
