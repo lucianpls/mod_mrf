@@ -45,8 +45,8 @@ APLOG_USE_MODULE(mrf);
 #endif
 
 static void *create_dir_config(apr_pool_t *p, char *dummy) {
-    mrf_conf *c =
-        reinterpret_cast<mrf_conf *>(apr_pcalloc(p, sizeof(mrf_conf)));
+    mrf_conf *c = reinterpret_cast<mrf_conf *>(
+        apr_pcalloc(p, sizeof(mrf_conf)));
     c->retries = 5;
     return c;
 }
@@ -58,7 +58,7 @@ static const char *set_regexp(cmd_parms *cmd,
     return add_regexp_to_array(cmd->pool, &c->arr_rxp, pattern);
 }
 
-// Parse a comma separated list of sources, add the entries to the array arr
+// Parse a comma separated list of sources, add the entries to the array
 // Source may include offset and size, white space separated
 static const char *parse_sources(cmd_parms *cmd, const char *src, 
     apr_array_header_t *arr, bool redir = false)
@@ -95,7 +95,8 @@ static const char *file_set(cmd_parms *cmd, void *dconf, const char *arg)
 {
     ap_assert(sizeof(apr_off_t) == 8);
     mrf_conf *c = (mrf_conf *)dconf;
-    const char *err_message;
+    const char *err_message, *line;
+
     apr_table_t *kvp = readAHTSEConfig(cmd->temp_pool, arg, &err_message);
     if (NULL == kvp)
         return err_message;
@@ -107,8 +108,6 @@ static const char *file_set(cmd_parms *cmd, void *dconf, const char *arg)
     // Got the parsed kvp table, parse the configuration items
     // Usually there is a single source, but we still need an array
     c->source = apr_array_make(cmd->pool, 1, sizeof(vfile_t));
-
-    const char *line;
 
     // Index file can also be provided, there could be a default
     line = apr_table_get(kvp, "IndexFile");
@@ -165,17 +164,6 @@ struct file_note {
 };
 
 static const apr_int32_t open_flags = APR_FOPEN_READ | APR_FOPEN_BINARY | APR_FOPEN_LARGEFILE;
-
-// Quiet error
-#define REQ_ERR_IF(X) if (X) {\
-    return HTTP_BAD_REQUEST; \
-}
-
-// Logged error
-#define SERR_IF(X, msg) if (X) { \
-    ap_log_rerror(APLOG_MARK, APLOG_ERR, 0, r, "%s", msg);\
-    return HTTP_INTERNAL_SERVER_ERROR; \
-}
 
 // Return the first source which contains the index, adjusts the index offset if necessary
 static const vfile_t *pick_source(const apr_array_header_t *sources, range_t *index) {
@@ -297,6 +285,17 @@ static const char *read_index(request_rec *r, range_t *idx, apr_off_t offset) {
     return nullptr;
 }
 
+// Quiet error
+#define REQ_ERR_IF(X) if (X) {\
+    return HTTP_BAD_REQUEST; \
+}
+
+// Logged error
+#define SERR_IF(X, msg) if (X) { \
+    ap_log_rerror(APLOG_MARK, APLOG_ERR, 0, r, "%s", msg);\
+    return HTTP_INTERNAL_SERVER_ERROR; \
+}
+
 static int handler(request_rec *r) {
     if (r->args || r->method_number != M_GET)
         return DECLINED;
@@ -337,8 +336,8 @@ static int handler(request_rec *r) {
     REQ_ERR_IF(tile.x >= level->w || tile.y >= level->h);
 
     // Offset of the index entry for this tile
-    apr_off_t tidx_offset = level->offset +
-        sizeof(range_t) * (tile.x + level->w * (tile.z * level->h + tile.y));
+    apr_off_t tidx_offset = sizeof(range_t) * (level->tiles +
+        + level->w * (tile.z * level->h + tile.y) + tile.x);
 
     range_t index;
     const char *message;
@@ -373,7 +372,7 @@ static int handler(request_rec *r) {
     apr_size_t size = static_cast<apr_size_t>(index.size);
     storage_manager img(apr_palloc(r->pool, size), size);
 
-    SERR_IF(img.buffer,
+    SERR_IF(!img.buffer,
         "Memory allocation error in mod_mrf");
     SERR_IF(img.size != vfile_pread(r, img.buffer, img.size, index.offset, src),
         "Data read error");
