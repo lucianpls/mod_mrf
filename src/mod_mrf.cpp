@@ -262,7 +262,7 @@ static int vfile_pread(request_rec *r, void *ptr, int size, apr_off_t offset, co
 
     apr_size_t sz = size;
     try {
-        stat = apr_file_seek(pfh, APR_SET, (apr_off_t *)&offset);
+        stat = apr_file_seek(pfh, APR_SET, &offset);
         if (stat != APR_SUCCESS) {
             ap_log_rerror(APLOG_MARK, APLOG_ERR, 0, r,
                 "Seek error in %s offset %" APR_OFF_T_FMT, name, offset);
@@ -274,11 +274,12 @@ static int vfile_pread(request_rec *r, void *ptr, int size, apr_off_t offset, co
         stat = apr_file_read(pfh, ptr, &sz);
     }
     catch (int &e) {
+        sz = e;
         apr_file_close(pfh); // Close the file
     }
 
     // return whatever was read
-    return sz;
+    return static_cast<int>(sz);
 }
 
 // Indirect read of index
@@ -369,19 +370,17 @@ static int handler(request_rec *r)
     if (!name)
         SERR_IF(true, apr_psprintf(r->pool, "No data file configured for %s", r->uri));
 
-    apr_uint32_t *buffer = static_cast<apr_uint32_t *>(
-        apr_palloc(r->pool, static_cast<apr_size_t>(index.size)));
-    SERR_IF(!buffer,
+    apr_size_t size = static_cast<apr_size_t>(index.size);
+    storage_manager img(apr_palloc(r->pool, size), size);
+
+    SERR_IF(img.buffer,
         "Memory allocation error in mod_mrf");
-    
-    int size = static_cast<int>(index.size);
-    SERR_IF(size != vfile_pread(r, buffer, size, index.offset, src),
+    SERR_IF(img.size != vfile_pread(r, img.buffer, img.size, index.offset, src),
         "Data read error");
 
     // Looks fine, set the outgoing etag and then the image
     apr_table_set(r->headers_out, "ETag", ETag);
-    storage_manager temp = { (char *)buffer, static_cast<int>(index.size) };
-    return sendImage(r, temp);
+    return sendImage(r, img);
 }
 
 static const command_rec cmds[] =
