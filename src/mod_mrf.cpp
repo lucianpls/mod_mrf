@@ -139,7 +139,7 @@ static const char *file_set(cmd_parms *cmd, void *dconf, const char *arg)
     // defaults to datafile read the empty tile
     // Default file name is the name of the first data file, if provided
     line = apr_table_get(kvp, "EmptyTile");
-    if (line && strlen(line) && (err_message = readFile(cmd->pool, c->raster.missing.empty, line)))
+    if (line && strlen(line) && (err_message = readFile(cmd->pool, c->raster.missing.data, line)))
         return err_message;
 
     // Set the index file name based on the first data file, if there is only one
