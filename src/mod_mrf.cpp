@@ -122,7 +122,7 @@ static const char *file_set(cmd_parms *cmd, void *dconf, const char *arg)
     line = apr_table_get(kvp, "RetryCount");
     c->tries = 1 + (line ? atoi(line) : 0);
     if ((c->tries < 1) || (c->tries > 100))
-        return "Invalid RetryCount value, should be 0 to 99, defaults to 4";
+        return "Invalid RetryCount value, should be 0 to 99";
 
     // Index file can also be provided, there could be a default
     line = apr_table_get(kvp, "IndexFile");
@@ -161,7 +161,7 @@ static const char *file_set(cmd_parms *cmd, void *dconf, const char *arg)
 
 // An open file handle and the matching file name, to be used as a note
 struct file_note {
-    const char *name;
+    const char *key;
     apr_file_t *pfh;
 };
 
@@ -177,7 +177,7 @@ static apr_status_t open_connection_file(request_rec *r, apr_file_t **ppfh,
 
     // Try to pick it up from the connection notes
     file_note *fn = (file_note *) apr_table_get(conn_notes, note_name);
-    if ((fn != NULL) && !apr_strnatcmp(src.name, fn->name)) { // Match, set file and return
+    if ((fn != NULL) && !apr_strnatcmp(src.name, fn->key)) { // Match, set file and return
         *ppfh = fn->pfh;
         return APR_SUCCESS;
     }
@@ -194,12 +194,12 @@ static apr_status_t open_connection_file(request_rec *r, apr_file_t **ppfh,
     }
 
     apr_status_t stat = apr_file_open(ppfh, src.name, flags, 0, pool);
-    if (stat != APR_SUCCESS) 
+    if (stat != APR_SUCCESS)
         return stat;
 
     // Fill the note and hook it up, then return
     fn->pfh = *ppfh;
-    fn->name = apr_pstrdup(pool, src.name);
+    fn->key = apr_pstrdup(pool, src.name);
     apr_table_setn(conn_notes, note_name, (const char *) fn);
     return APR_SUCCESS;
 }
@@ -243,7 +243,7 @@ static apr_status_t open_data_file(request_rec *r, apr_file_t **ppfh,
 }
 
 // Return the first source which contains the index, adjusts the index offset if necessary
-static const vfile_t *get_source(const apr_array_header_t *sources, range_t *index) {
+static const vfile_t *pick_source(const apr_array_header_t *sources, range_t *index) {
     for (int i = 0; i < sources->nelts; i++) {
         vfile_t *source = &APR_ARRAY_IDX(sources, i, vfile_t);
         if ((source->range.offset == 0 && source->range.size == 0)
@@ -256,6 +256,93 @@ static const vfile_t *get_source(const apr_array_header_t *sources, range_t *ind
         }
     }
     return NULL;
+}
+
+// Like pread, except not really thread safe
+static int vfile_pread(request_rec *r, void *ptr, int size, off_t offset, const vfile_t *fh) {
+    auto  cfg = get_conf<mrf_conf>(r, &mrf_module);
+    const char *name = fh->name;
+
+    bool redirect = (strlen(name) > 3 && name[0] == ':' && name[1] == '/');
+
+    if (redirect) { // Remote file, just use a range request
+        // TODO: S3 authorized requests
+        ap_filter_rec_t *receive_filter = ap_get_output_filter_handle("Receive");
+        if (!receive_filter) {
+            ap_log_rerror(APLOG_MARK, APLOG_ERR, 0, r,
+                "Can't find receive filter, did you load mod_receive?");
+            return 0;
+        }
+
+        name = fh->name + 2; // Skip the :/
+
+        // Get a buffer for the received image
+        receive_ctx rctx;
+        rctx.buffer = reinterpret_cast<char *>(ptr);
+        rctx.maxsize = size;
+        rctx.size = 0;
+
+        // Data file is on a remote site a range request redirect with a range header
+        char *Range = apr_psprintf(r->pool,
+            "bytes=%" APR_UINT64_T_FMT "-%" APR_UINT64_T_FMT,
+            offset, offset + size);
+
+        // S3 may return less than requested, so we retry the request a couple of times
+        int tries = cfg->tries;
+        bool failed = false;
+        apr_time_t now = apr_time_now();
+        do {
+            request_rec *sr = ap_sub_req_lookup_uri(name, r, r->output_filters);
+            apr_table_setn(sr->headers_in, "Range", Range);
+            ap_filter_t *rf = ap_add_output_filter_handle(receive_filter, &rctx,
+                sr, sr->connection);
+            int status = ap_run_sub_req(sr);
+            ap_remove_output_filter(rf);
+            ap_destroy_sub_req(sr);
+
+            if ((status != APR_SUCCESS || sr->status != HTTP_PARTIAL_CONTENT
+                || rctx.size != static_cast<int>(size))
+                && (0 == tries--))
+            {
+                ap_log_rerror(APLOG_MARK, APLOG_ERR, 0, r,
+                    "Can't fetch data from %s, took %" APR_TIME_T_FMT "us",
+                    name, apr_time_now() - now);
+                failed = true;
+            }
+        } while (!failed && rctx.size != static_cast<int>(size));
+
+        return rctx.size;
+    }
+
+    // Local file, open, seek, read, close
+    apr_pool_t *pool = r->pool;
+    apr_file_t *pfh;
+    apr_status_t stat = apr_file_open(&pfh, name, open_flags, 0, pool);
+    if (stat != APR_SUCCESS) {
+        ap_log_rerror(APLOG_MARK, APLOG_ERR, 0, r,
+            "Can't open file %s", name);
+            return 0; // No read
+    }
+
+    apr_size_t sz = size;
+    try {
+        stat = apr_file_seek(pfh, APR_SET, (apr_off_t *)&offset);
+        if (stat != APR_SUCCESS) {
+            ap_log_rerror(APLOG_MARK, APLOG_ERR, 0, r,
+                "Seek error in %s offset %" APR_OFF_T_FMT, name, offset);
+            sz = 0;
+            throw 0; // No read
+        }
+
+        sz = size;
+        stat = apr_file_read(pfh, ptr, &sz);
+    }
+    catch (int &e) {
+        apr_file_close(pfh); // Close the file
+    }
+
+    // return whatever was read
+    return sz;
 }
 
 static const char *read_index(request_rec *r, range_t *idx, apr_off_t offset) {
@@ -348,7 +435,7 @@ static int handler(request_rec *r)
     }
 
     // Now for the data part
-    const vfile_t *src = get_source(cfg->source, &index);
+    const vfile_t *src = pick_source(cfg->source, &index);
     const char *name = (src && src->name) ? src->name : nullptr;
     if (!name)
         SERR_IF(true, apr_psprintf(r->pool, "No data file configured for %s", r->uri));
