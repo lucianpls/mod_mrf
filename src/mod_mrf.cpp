@@ -105,10 +105,17 @@ static const char *file_set(cmd_parms *cmd, void *dconf, const char *arg)
         return err_message;
 
     // Got the parsed kvp table, parse the configuration items
-    const char *line;
+    // Usually there is a single source, but we still need an array
     c->source = apr_array_make(cmd->pool, 1, sizeof(vfile_t));
 
-    // The DataFile, multiple times, includes redirects
+    const char *line;
+
+    // Index file can also be provided, there could be a default
+    line = apr_table_get(kvp, "IndexFile");
+    c->idx.name = apr_pstrdup(cmd->pool, line);
+
+    // The DataFile, required, multiple times, includes redirects
+    line = apr_table_getm(cmd->temp_pool, kvp, "DataFile");
     if ((NULL != (line = apr_table_getm(cmd->temp_pool, kvp, "DataFile"))) &&
         (NULL != (line = parse_sources(cmd, line, c->source))))
         return line;
@@ -118,39 +125,32 @@ static const char *file_set(cmd_parms *cmd, void *dconf, const char *arg)
         (NULL != (line = parse_redirects(cmd, line, c->source))))
         return line;
 
+    // Check that we have at least one data file
+    const char *firstname = nullptr;
+    if (0 == c->source->nelts || (firstname = APR_ARRAY_IDX(c->source, 0, vfile_t).name))
+        return "Need at least one DataFile directive";
+
     line = apr_table_get(kvp, "RetryCount");
     c->retries = 1 + (line ? atoi(line) : 0);
     if ((c->retries < 1) || (c->retries > 100))
         return "Invalid RetryCount value, should be 0 to 99";
 
-    // Index file can also be provided, there could be a default
-    line = apr_table_get(kvp, "IndexFile");
-    c->idx.name = apr_pstrdup(cmd->pool, line);
-
     // If an emtpy tile is not provided, it falls through, which results in a 404 error
     // If provided, it has an optional size and offset followed by file name which 
     // defaults to datafile read the empty tile
     // Default file name is the name of the first data file, if provided
-    const char *datafname = NULL;
-    for (int i = 0; i < c->source->nelts; i++)
-        if (NULL != (datafname = APR_ARRAY_IDX(c->source, i, vfile_t).name))
-            break;
-
-    const char *efname = datafname;
     line = apr_table_get(kvp, "EmptyTile");
     if (line && strlen(line) && (err_message = readFile(cmd->pool, c->raster.missing.empty, line)))
-       return err_message;
+        return err_message;
 
     // Set the index file name based on the first data file, if there is only one
     if (!c->idx.name) {
-        if (!datafname)
-            return "Missing IndexFile or DataFile directive";
-        c->idx.name = apr_pstrdup(cmd->pool, datafname);
+        c->idx.name = apr_pstrdup(cmd->pool, firstname);
         char *last;
         char *token = apr_strtok(c->idx.name, ".", &last); // strtok destroys the idxfile
         while (*last != 0 && token != NULL)
             token = apr_strtok(NULL, ".", &last);
-        memcpy(c->idx.name, datafname, strlen(datafname)); // Get a new copy
+        memcpy(c->idx.name, firstname, strlen(firstname)); // Get a new copy
         if (token != NULL && strlen(token) == 3)
             memcpy(token, "idx", 3);
     }
