@@ -20,16 +20,19 @@ NS_AHTSE_USE
 struct mrf_conf {
     // array of guard regexp, one of them has to match
     apr_array_header_t *arr_rxp;
+
+    // The raster represented by this MRF configuration
     TiledRaster raster;
 
     // At least one source, but there could be more
     apr_array_header_t *source;
 
-    // The MRF index file
+    // The MRF index file, required
     vfile_t idx;
 
     // Used for redirect, how many times to try
-    int tries;
+    // defaults to 5
+    int retries;
 
     // If set, only secondary requests are allowed
     int indirect;
@@ -41,11 +44,11 @@ extern module AP_MODULE_DECLARE_DATA mrf_module;
 APLOG_USE_MODULE(mrf);
 #endif
 
-static inline void *create_dir_config(apr_pool_t *p, char *dummy)
+static void *create_dir_config(apr_pool_t *p, char *dummy)
 {
     mrf_conf *c =
         (mrf_conf *)apr_pcalloc(p, sizeof(mrf_conf));
-    c->tries = 5;
+    c->retries = 5;
     return c;
 }
 
@@ -86,11 +89,7 @@ static const char *parse_sources(cmd_parms *cmd, const char *src,
     return nullptr;
 }
 
-static const char *parse_redirects(cmd_parms *cmd, const char *src,
-    apr_array_header_t *arr)
-{
-    return parse_sources(cmd, src, arr, true);
-}
+#define parse_redirects(cmd, src, arr) parse_sources(cmd, src, arr, true)
 
 static const char *file_set(cmd_parms *cmd, void *dconf, const char *arg)
 {
@@ -120,8 +119,8 @@ static const char *file_set(cmd_parms *cmd, void *dconf, const char *arg)
         return line;
 
     line = apr_table_get(kvp, "RetryCount");
-    c->tries = 1 + (line ? atoi(line) : 0);
-    if ((c->tries < 1) || (c->tries > 100))
+    c->retries = 1 + (line ? atoi(line) : 0);
+    if ((c->retries < 1) || (c->retries > 100))
         return "Invalid RetryCount value, should be 0 to 99";
 
     // Index file can also be provided, there could be a default
@@ -201,16 +200,19 @@ static int vfile_pread(request_rec *r, void *ptr, int size, apr_off_t offset, co
 
     bool redirect = (strlen(name) > 3 && name[0] == ':' && name[1] == '/');
 
-    if (redirect) { // Remote file, just use a range request
+    if (redirect) {
+        // Remote file, just use a range request
         // TODO: S3 authorized requests
+
+        // Skip the ":/" used to mark a redirect
+        name = fh->name + 2;
+
         ap_filter_rec_t *receive_filter = ap_get_output_filter_handle("Receive");
         if (!receive_filter) {
             ap_log_rerror(APLOG_MARK, APLOG_ERR, 0, r,
                 "Can't find receive filter, did you load mod_receive?");
             return 0;
         }
-
-        name = fh->name + 2; // Skip the :/
 
         // Get a buffer for the received image
         receive_ctx rctx;
@@ -224,7 +226,7 @@ static int vfile_pread(request_rec *r, void *ptr, int size, apr_off_t offset, co
             offset, offset + size);
 
         // S3 may return less than requested, so we retry the request a couple of times
-        int tries = cfg->tries;
+        int tries = cfg->retries;
         bool failed = false;
         apr_time_t now = apr_time_now();
         do {
@@ -282,7 +284,7 @@ static int vfile_pread(request_rec *r, void *ptr, int size, apr_off_t offset, co
     return static_cast<int>(sz);
 }
 
-// Indirect read of index
+// Indirect read of index, returns error message or null
 static const char *read_index(request_rec *r, range_t *idx, apr_off_t offset) {
     auto  cfg = get_conf<mrf_conf>(r, &mrf_module);
     static int size = sizeof(range_t);
@@ -292,12 +294,10 @@ static const char *read_index(request_rec *r, range_t *idx, apr_off_t offset) {
 
     idx->offset = be64toh(idx->offset);
     idx->size = be64toh(idx->size);
-    return nullptr; // Success
+    return nullptr;
 }
 
-static int handler(request_rec *r)
-{
-    // Only get and no arguments
+static int handler(request_rec *r) {
     if (r->args || r->method_number != M_GET)
         return DECLINED;
 
@@ -383,8 +383,7 @@ static int handler(request_rec *r)
     return sendImage(r, img);
 }
 
-static const command_rec cmds[] =
-{
+static const command_rec cmds[] = {
     AP_INIT_FLAG(
     "MRF_Indirect",
     CMD_FUNC ap_set_flag_slot,
