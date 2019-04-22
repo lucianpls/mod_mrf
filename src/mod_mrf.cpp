@@ -44,15 +44,15 @@ extern module AP_MODULE_DECLARE_DATA mrf_module;
 APLOG_USE_MODULE(mrf);
 #endif
 
-static void *create_dir_config(apr_pool_t *p, char *dummy)
-{
+static void *create_dir_config(apr_pool_t *p, char *dummy) {
     mrf_conf *c =
-        (mrf_conf *)apr_pcalloc(p, sizeof(mrf_conf));
+        reinterpret_cast<mrf_conf *>(apr_pcalloc(p, sizeof(mrf_conf)));
     c->retries = 5;
     return c;
 }
 
-static const char *set_regexp(cmd_parms *cmd, mrf_conf *c, 
+static const char *set_regexp(cmd_parms *cmd, 
+    mrf_conf *c, 
     const char *pattern)
 {
     return add_regexp_to_array(cmd->pool, &c->arr_rxp, pattern);
@@ -71,7 +71,7 @@ static const char *parse_sources(cmd_parms *cmd, const char *src,
 
         char *fname = ap_getword_white_nc(arr->pool, &input);
         if (!fname || strlen(fname) < 1)
-            return "Missing source name";
+            return "Source name missing";
 
         if (redir) { // Check that it is absolute and add :/
             if (fname[0] != '/')
@@ -117,17 +117,17 @@ static const char *file_set(cmd_parms *cmd, void *dconf, const char *arg)
     // The DataFile, required, multiple times, includes redirects
     line = apr_table_getm(cmd->temp_pool, kvp, "DataFile");
     if ((NULL != (line = apr_table_getm(cmd->temp_pool, kvp, "DataFile"))) &&
-        (NULL != (line = parse_sources(cmd, line, c->source))))
-        return line;
+        (NULL != (err_message = parse_sources(cmd, line, c->source))))
+        return err_message;
 
     // Old style redirects go at the end
     if ((NULL != (line = apr_table_getm(cmd->temp_pool, kvp, "Redirect"))) &&
-        (NULL != (line = parse_redirects(cmd, line, c->source))))
-        return line;
+        (NULL != (err_message = parse_redirects(cmd, line, c->source))))
+        return err_message;
 
     // Check that we have at least one data file
     const char *firstname = nullptr;
-    if (0 == c->source->nelts || (firstname = APR_ARRAY_IDX(c->source, 0, vfile_t).name))
+    if (0 == c->source->nelts || !(firstname = APR_ARRAY_IDX(c->source, 0, vfile_t).name))
         return "Need at least one DataFile directive";
 
     line = apr_table_get(kvp, "RetryCount");
