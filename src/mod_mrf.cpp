@@ -36,6 +36,9 @@ struct mrf_conf {
 
     // If set, only secondary requests are allowed
     int indirect;
+
+    // If set, file handles are not held open
+    int dynamic;
 };
 
 extern module AP_MODULE_DECLARE_DATA mrf_module;
@@ -154,14 +157,12 @@ static const char *file_set(cmd_parms *cmd, void *dconf, const char *arg)
             memcpy(token, "idx", 3);
     }
 
+    line = apr_table_get(kvp, "Dynamic");
+    if (line)
+        c->dynamic = true;
+
     return NULL;
 }
-
-// An open file handle and the matching file name, to be used as a note
-struct file_note {
-    const char *key;
-    apr_file_t *pfh;
-};
 
 static const apr_int32_t open_flags = APR_FOPEN_READ | APR_FOPEN_BINARY | APR_FOPEN_LARGEFILE;
 
@@ -181,8 +182,56 @@ static const vfile_t *pick_source(const apr_array_header_t *sources, range_t *in
     return NULL;
 }
 
+// An open file handle and the matching file name, to be used as a note
+struct file_note {
+    const vfile_t *fh;
+    apr_file_t *pfh;
+};
+
+//
+// Open or retrieve a connection cached file handle
+// Do no close the returned file handle, it will be removed when the connection drops
+//
+// Only one opened handle exists per connection/token pair
+// This may lead to less caching, but avoids having too many opened files
+//
+static apr_status_t openConnFile(request_rec *r, apr_file_t **ppfh, const vfile_t *fh,
+    const char *token, apr_int32_t extra_open_flags = 0)
+{
+    apr_table_t *conn_notes = r->connection->notes;
+
+    file_note *fn = (file_note *)apr_table_get(conn_notes, token);
+    if (fn && fn->fh == fh) { // Match, return the handle
+        *ppfh = fn->pfh;
+        return APR_SUCCESS;
+    }
+
+    // Use the connection pool, it will close the file when it gets dropped
+    apr_pool_t *pool = r->connection->pool;
+    if (!fn) { // new connection file
+        fn = reinterpret_cast<file_note *>(apr_pcalloc(pool, sizeof(file_note)));
+    }
+    else { // Not the right file, clean it up
+        apr_table_unset(conn_notes, token); // Does not remove the storage
+        apr_file_close(fn->pfh);
+    }
+
+    apr_status_t stat = apr_file_open(ppfh, fh->name, open_flags || extra_open_flags, 0, pool);
+    if (APR_SUCCESS != stat)
+        return stat;
+
+    // Update the note and hook it up before returning
+    fn->fh = fh;
+    fn->pfh = *ppfh;
+    apr_table_setn(conn_notes, token, (const char *)fn);
+    return APR_SUCCESS;
+}
+
 // Like pread, except not really thread safe
-static int vfile_pread(request_rec *r, void *ptr, int size, apr_off_t offset, const vfile_t *fh) {
+// The token is used for connection caching
+static int vfile_pread(request_rec *r, storage_manager &mgr,
+    apr_off_t offset, const vfile_t *fh, const char *token = "MRF_DATA")
+{
     auto  cfg = get_conf<mrf_conf>(r, &mrf_module);
     const char *name = fh->name;
 
@@ -204,14 +253,14 @@ static int vfile_pread(request_rec *r, void *ptr, int size, apr_off_t offset, co
 
         // Get a buffer for the received image
         receive_ctx rctx;
-        rctx.buffer = reinterpret_cast<char *>(ptr);
-        rctx.maxsize = size;
+        rctx.buffer = mgr.buffer;
+        rctx.maxsize = mgr.size;
         rctx.size = 0;
 
         // Data file is on a remote site a range request redirect with a range header
         char *Range = apr_psprintf(r->pool,
             "bytes=%" APR_UINT64_T_FMT "-%" APR_UINT64_T_FMT,
-            offset, offset + size);
+            offset, offset + mgr.size);
 
         // S3 may return less than requested, so we retry the request a couple of times
         int tries = cfg->retries;
@@ -226,58 +275,56 @@ static int vfile_pread(request_rec *r, void *ptr, int size, apr_off_t offset, co
             ap_remove_output_filter(rf);
             ap_destroy_sub_req(sr);
 
-            if ((status != APR_SUCCESS || sr->status != HTTP_PARTIAL_CONTENT
-                || rctx.size != static_cast<int>(size))
-                && (0 == tries--))
+            if ((status != APR_SUCCESS
+                    || sr->status != HTTP_PARTIAL_CONTENT
+                    || rctx.size != mgr.size)
+                        && (0 == tries--))
             {
                 ap_log_rerror(APLOG_MARK, APLOG_ERR, 0, r,
                     "Can't fetch data from %s, took %" APR_TIME_T_FMT "us",
                     name, apr_time_now() - now);
                 failed = true;
             }
-        } while (!failed && rctx.size != static_cast<int>(size));
+        } while (!failed && rctx.size != mgr.size);
 
         return rctx.size;
-    }
+    } // Redirect read
 
-    // Local file, open, seek, read, close
-    apr_pool_t *pool = r->pool;
+    // Local file
     apr_file_t *pfh;
-    apr_status_t stat = apr_file_open(&pfh, name, open_flags, 0, pool);
+    apr_status_t stat;
+
+    // Don't keep handles open
+    stat = cfg->dynamic ?
+        apr_file_open(&pfh, name, open_flags, 0, r->pool)
+      : openConnFile(r, &pfh, fh, token, APR_FOPEN_BUFFERED);
+
     if (stat != APR_SUCCESS) {
         ap_log_rerror(APLOG_MARK, APLOG_ERR, 0, r,
             "Can't open file %s", name);
-            return 0; // No read
+        return 0; // No file
     }
 
-    apr_size_t sz = size;
-    try {
-        stat = apr_file_seek(pfh, APR_SET, &offset);
-        if (stat != APR_SUCCESS) {
-            ap_log_rerror(APLOG_MARK, APLOG_ERR, 0, r,
-                "Seek error in %s offset %" APR_OFF_T_FMT, name, offset);
-            sz = 0;
-            throw 0; // No read
-        }
-
-        sz = size;
-        stat = apr_file_read(pfh, ptr, &sz);
-    }
-    catch (int &e) {
-        sz = e;
-        apr_file_close(pfh); // Close the file
+    apr_size_t sz = static_cast<int>(mgr.size);
+    stat = apr_file_seek(pfh, APR_SET, &offset);
+    if (APR_SUCCESS != stat || APR_SUCCESS != apr_file_read(pfh, mgr.buffer, &sz)) {
+        ap_log_rerror(APLOG_MARK, APLOG_ERR, 0, r,
+            "Read error in %s offset %" APR_OFF_T_FMT, name, offset);
+        sz = 0;
     }
 
-    // return whatever was read
-    return static_cast<int>(sz);
+    if (cfg->dynamic)
+        apr_file_close(pfh);
+
+    return (mgr.size = static_cast<int>(sz));
 }
 
 // Indirect read of index, returns error message or null
 static const char *read_index(request_rec *r, range_t *idx, apr_off_t offset) {
     auto  cfg = get_conf<mrf_conf>(r, &mrf_module);
-    static int size = sizeof(range_t);
+    storage_manager dst(idx, sizeof(range_t));
 
-    if (size != vfile_pread(r, idx, size, offset, &cfg->idx))
+    if (sizeof(range_t) != vfile_pread(r, dst, offset, &cfg->idx, "MRF_INDEX"))
         return "Read error";
 
     idx->offset = be64toh(idx->offset);
@@ -374,7 +421,7 @@ static int handler(request_rec *r) {
 
     SERR_IF(!img.buffer,
         "Memory allocation error in mod_mrf");
-    SERR_IF(img.size != vfile_pread(r, img.buffer, img.size, index.offset, src),
+    SERR_IF(img.size != vfile_pread(r, img, index.offset, src),
         "Data read error");
 
     // Looks fine, set the outgoing etag and then the image
