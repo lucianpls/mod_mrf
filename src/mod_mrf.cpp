@@ -17,6 +17,37 @@
 using namespace std;
 NS_AHTSE_USE
 
+// Max count, should never happen
+#define NPOS 0xffffffff
+// Block size for canned format
+#define BSZ 512
+
+// Bit set count for 32bit values
+#if defined(_WIN32)
+#include <intrin.h>
+#define bsc __popcnt
+#else
+#define bsc __builtint_popcount
+#endif
+
+// The next two functions are from the mrf/mrf_apps/can program
+inline bool is_on(uint32_t *values, int bit) {
+    return 0 != (values[1 + bit / 32] & (static_cast<uint32_t>(1) << bit % 32));
+}
+
+static inline uint64_t hsize(uint64_t in_size) {
+    return 16 + 16 * ((96 * BSZ - 1 + in_size) / (96 * BSZ));
+}
+
+inline uint32_t block_count(uint32_t *values, int bit) {
+    if (!is_on(values, bit))
+        return NPOS;
+    return (values[0] +
+        bsc(values[1]) * (((bit / 32) & 1) | (bit / 64)) +
+        bsc(values[2]) * (bit / 64) +
+        bsc(values[1 + (bit / 32)] & ((1ULL << (bit % 32)) - 1)));
+}
+
 struct mrf_conf {
     // array of guard regexp, one of them has to match
     apr_array_header_t *arr_rxp;
@@ -39,6 +70,9 @@ struct mrf_conf {
 
     // If set, file handles are not held open
     int dynamic;
+
+    // the canned index header size, or 0 for normal index
+    uint64_t can_hsize;
 };
 
 extern module AP_MODULE_DECLARE_DATA mrf_module;
@@ -157,9 +191,14 @@ static const char *file_set(cmd_parms *cmd, void *dconf, const char *arg)
             memcpy(token, "idx", 3);
     }
 
-    line = apr_table_get(kvp, "Dynamic");
-    if (line)
+    if ((line = apr_table_get(kvp, "Dynamic")) && getBool(line))
         c->dynamic = true;
+
+    // The original index file size is the number of tiles * 16
+    // Since the MRF always ends with a single tile, the total number
+    // of tiles in the MRF is equal to the number of tiles at level 0 + size.z
+    if ((line = apr_table_get(kvp, "CannedIndex")) && getBool(line))
+        c->can_hsize = hsize((c->raster.size.z + c->raster.rsets[0].tiles) * 16);
 
     return NULL;
 }
@@ -295,9 +334,10 @@ static int vfile_pread(request_rec *r, storage_manager &mgr,
     apr_status_t stat;
 
     // Don't keep handles open
-    stat = cfg->dynamic ?
-        apr_file_open(&pfh, name, open_flags, 0, r->pool)
-      : openConnFile(r, &pfh, fh, token, APR_FOPEN_BUFFERED);
+    if (cfg->dynamic)
+        stat = apr_file_open(&pfh, name, open_flags, 0, r->pool);
+    else
+        stat = openConnFile(r, &pfh, fh, token, APR_FOPEN_BUFFERED);
 
     if (stat != APR_SUCCESS) {
         ap_log_rerror(APLOG_MARK, APLOG_ERR, 0, r,
@@ -315,6 +355,7 @@ static int vfile_pread(request_rec *r, storage_manager &mgr,
 
     if (cfg->dynamic)
         apr_file_close(pfh);
+    // Don't close non-dynamic mode handles, they are reused
 
     return (mgr.size = static_cast<int>(sz));
 }
@@ -323,6 +364,34 @@ static int vfile_pread(request_rec *r, storage_manager &mgr,
 static const char *read_index(request_rec *r, range_t *idx, apr_off_t offset) {
     auto  cfg = get_conf<mrf_conf>(r, &mrf_module);
     storage_manager dst(idx, sizeof(range_t));
+
+    if (cfg->can_hsize) { // No checks that the file is correct
+        // Original block offset
+        uint64_t boffset = offset / BSZ;
+
+        // Read the line containing the target bit
+        uint32_t line[4];
+        storage_manager lmgr(line, 16);
+        // DEBUG ONLY
+        off_t loffset = 16 * (1 + (boffset / 96));
+
+        if (16 != vfile_pread(r, lmgr, 16 * (1 + (boffset / 96)), &cfg->idx, "MRF_INDEX"))
+            return "Bitmap read error";
+
+        // Change to host endian
+        for (int i = 0; i < 4; i++)
+            line[i] = be32toh(line[i]);
+
+        // The relocated block number for the original index record
+        uint64_t blockn = block_count(line, static_cast<int>(boffset % 96));
+        if (NPOS == blockn) {
+            idx->size = idx->offset = 0;
+            return nullptr;
+        }
+
+        // Adjust the offset before reading the data
+        offset = cfg->can_hsize + blockn * BSZ + offset % BSZ;
+    }
 
     if (sizeof(range_t) != vfile_pread(r, dst, offset, &cfg->idx, "MRF_INDEX"))
         return "Read error";
@@ -419,8 +488,7 @@ static int handler(request_rec *r) {
     apr_size_t size = static_cast<apr_size_t>(index.size);
     storage_manager img(apr_palloc(r->pool, size), size);
 
-    SERR_IF(!img.buffer,
-        "Memory allocation error in mod_mrf");
+    SERR_IF(!img.buffer, "Memory allocation error in mod_mrf");
     SERR_IF(img.size != vfile_pread(r, img, index.offset, src),
         "Data read error");
 

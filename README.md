@@ -73,7 +73,12 @@ AHTSE Control Directives for this module are:
 ***Dynamic On***
  - Optional, flags the local files as dynamic, disabling any caching or file handle reuse. To be used
  when the MRF files are changed at run-time, avoiding stale or even broken content.  MRF in-place
- modification do not require this flag because the old content is still available.
+ modification do not require this flag because the old content is still available
+
+***CannedIndex On***
+ - Optional, flags the index file as a canned format index, see mrf_apps/can.cpp.  This is a dense 
+ format index that can be much smaller.  Should be used only when needed, and not recommended when
+ Dynamic is also on
 
 ***Redirect path start_offset size***
   *Deprecated*, use the DataFile directive and start path with ://
