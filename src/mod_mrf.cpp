@@ -27,7 +27,8 @@ NS_AHTSE_USE
 #include <intrin.h>
 #define bsc __popcnt
 #else
-#define bsc __builtint_popcount
+// This only works in gcc
+#define bsc __builtin_popcount
 #endif
 
 // The next two functions are from the mrf/mrf_apps/can program
@@ -372,10 +373,8 @@ static const char *read_index(request_rec *r, range_t *idx, apr_off_t offset) {
         // Read the line containing the target bit
         uint32_t line[4];
         storage_manager lmgr(line, 16);
-        // DEBUG ONLY
-        off_t loffset = 16 * (1 + (boffset / 96));
-
-        if (16 != vfile_pread(r, lmgr, 16 * (1 + (boffset / 96)), &cfg->idx, "MRF_INDEX"))
+        if (16 != vfile_pread(r, lmgr, 
+            16 * (1 + (boffset / 96)), &cfg->idx, "MRF_INDEX"))
             return "Bitmap read error";
 
         // Change to host endian
