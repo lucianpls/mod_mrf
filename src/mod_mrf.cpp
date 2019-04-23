@@ -72,6 +72,9 @@ struct mrf_conf {
     // If set, file handles are not held open
     int dynamic;
 
+    // Ignore URL parameters
+    int allowparams;
+
     // the canned index header size, or 0 for normal index
     uint64_t can_hsize;
 };
@@ -412,11 +415,13 @@ static const char *read_index(request_rec *r, range_t *idx, apr_off_t offset) {
 }
 
 static int handler(request_rec *r) {
-    if (r->args || r->method_number != M_GET)
+    if (r->method_number != M_GET)
         return DECLINED;
 
     auto cfg = get_conf<mrf_conf>(r, &mrf_module);
-    if ((cfg->indirect && !r->main) || !requestMatches(r, cfg->arr_rxp))
+    if ((r->args && ! cfg->allowparams) ||
+        (cfg->indirect && !r->main) || 
+        !requestMatches(r, cfg->arr_rxp))
         return DECLINED;
 
     apr_array_header_t *tokens = tokenize(r->pool, r->uri, '/');
@@ -519,6 +524,14 @@ static const command_rec cmds[] = {
     0, // Self-pass argument
     ACCESS_CONF, // availability
     "The configuration file for this module"
+    ),
+
+    AP_INIT_FLAG(
+    "AllowParams",
+    CMD_FUNC ap_set_flag_slot,
+    (void *)APR_OFFSETOF(mrf_conf, allowparams),
+    ACCESS_CONF,
+    "If set, this configuration only responds to subrequests"
     ),
 
     { NULL }
