@@ -55,7 +55,8 @@ AHTSE Control Directives for this module are:
   It can be a redirect path in the host namespace, if it starts with ://
  
 ***EmptyTile Size Offset FileName***
- - Optional, provides the tile content to be sent when the requested tile is missing. 
+ - Optional, provides the tile content to be sent when the requested tile is missing.
+ The file has to be local, since the empty tile is read at start-up
  By default the request is ignored, which results in a 404 error if a fallback mechanism does not 
  exist. If present, the first number is assumed to be the size, second is offset. If filename is 
  not given, the first data file name is used.
@@ -69,6 +70,11 @@ AHTSE Control Directives for this module are:
  this value but 65th bit is set, also the only value that has this bit set. All the other tiles 
  have 64 bit ETags that depend on this value.
  
+***Dynamic On***
+ - Optional, flags the local files as dynamic, disabling any caching or file handle reuse. To be used
+ when the MRF files are changed at run-time, avoiding stale or even broken content.  MRF in-place
+ modification do not require this flag because the old content is still available.
+
 ***Redirect path start_offset size***
   *Deprecated*, use the DataFile directive and start path with ://
 
