@@ -527,7 +527,7 @@ static const command_rec cmds[] = {
     ),
 
     AP_INIT_FLAG(
-    "AllowParams",
+    "MRF_AllowParams",
     CMD_FUNC ap_set_flag_slot,
     (void *)APR_OFFSETOF(mrf_conf, allowparams),
     ACCESS_CONF,
