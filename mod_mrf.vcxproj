@@ -22,9 +22,6 @@
     <ClCompile Include="src\mod_mrf.cpp" />
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="src\mod_mrf.h" />
-  </ItemGroup>
-  <ItemGroup>
     <None Include=".gitignore" />
     <None Include="apr_FOPEN_RANDOM.patch" />
     <None Include="LICENSE" />
@@ -85,6 +82,7 @@
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
     <LinkIncremental>true</LinkIncremental>
     <TargetExt>.so</TargetExt>
+    <SourcePath>\Apache24\include;$(VC_SourcePath);</SourcePath>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
     <LinkIncremental>true</LinkIncremental>
@@ -110,7 +108,7 @@
       <SubSystem>Windows</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <AdditionalLibraryDirectories>\Apache24\lib</AdditionalLibraryDirectories>
-      <AdditionalDependencies>libhttpd.lib;libapr-2.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>libahtse.lib;libhttpd.lib;libapr-2.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <AdditionalOptions>/EXPORT:mrf_module,@1</AdditionalOptions>
       <OutputFile>$(OutDir)$(TargetName)$(TargetExt)</OutputFile>
     </Link>
