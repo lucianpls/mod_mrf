@@ -12,8 +12,6 @@
 #include <http_log.h>
 #include <http_request.h>
 
-#define CMD_FUNC (cmd_func)
-
 using namespace std;
 NS_AHTSE_USE
 
@@ -180,7 +178,8 @@ static const char *file_set(cmd_parms *cmd, void *dconf, const char *arg)
     // defaults to datafile read the empty tile
     // Default file name is the name of the first data file, if provided
     line = apr_table_get(kvp, "EmptyTile");
-    if (line && strlen(line) && (err_message = readFile(cmd->pool, c->raster.missing.data, line)))
+    if (line && strlen(line) && (err_message = readFile(
+        cmd->pool, c->raster.missing.data, line)))
         return err_message;
 
     // Set the index file name based on the first data file, if there is only one
@@ -349,7 +348,7 @@ static int vfile_pread(request_rec *r, storage_manager &mgr,
         return 0; // No file
     }
 
-    apr_size_t sz = static_cast<int>(mgr.size);
+    apr_size_t sz = static_cast<apr_size_t>(mgr.size);
     stat = apr_file_seek(pfh, APR_SET, &offset);
     if (APR_SUCCESS != stat || APR_SUCCESS != apr_file_read(pfh, mgr.buffer, &sz)) {
         ap_log_rerror(APLOG_MARK, APLOG_ERR, 0, r,
@@ -477,7 +476,7 @@ static int handler(request_rec *r) {
     // Check for conditional ETag here, no need to get the data
     char ETag[16];
     // Try to distribute the bits a bit to generate an ETag
-    tobase32(raster.seed ^ (index.size << 40) ^ index.offset, ETag);
+    tobase32((raster.seed ^ (index.size << 40)) ^ index.offset, ETag);
     if (etagMatches(r, ETag)) {
         apr_table_set(r->headers_out, "ETag", ETag);
         return HTTP_NOT_MODIFIED;
@@ -486,8 +485,7 @@ static int handler(request_rec *r) {
     // Now for the data part
     const vfile_t *src = pick_source(cfg->source, &index);
     const char *name = (src && src->name) ? src->name : nullptr;
-    if (!name)
-        SERR_IF(true, apr_psprintf(r->pool, "No data file configured for %s", r->uri));
+    SERR_IF(!name, apr_psprintf(r->pool, "No data file configured for %s", r->uri));
 
     apr_size_t size = static_cast<apr_size_t>(index.size);
     storage_manager img(apr_palloc(r->pool, size), size);
@@ -504,7 +502,7 @@ static int handler(request_rec *r) {
 static const command_rec cmds[] = {
     AP_INIT_FLAG(
     "MRF_Indirect",
-    CMD_FUNC ap_set_flag_slot,
+    (cmd_func) ap_set_flag_slot,
     (void *)APR_OFFSETOF(mrf_conf, indirect),
     ACCESS_CONF,
     "If set, this configuration only responds to subrequests"
@@ -512,7 +510,7 @@ static const command_rec cmds[] = {
 
     AP_INIT_TAKE1(
     "MRF_RegExp",
-    (cmd_func)set_regexp,
+    (cmd_func) set_regexp,
     0, // Self-pass argument
     ACCESS_CONF, // availability
     "Regular expression that the URL has to match.  At least one is required."
@@ -520,7 +518,7 @@ static const command_rec cmds[] = {
 
     AP_INIT_TAKE1(
     "MRF_ConfigurationFile",
-    CMD_FUNC file_set, // Callback
+    (cmd_func) file_set, // Callback
     0, // Self-pass argument
     ACCESS_CONF, // availability
     "The configuration file for this module"
@@ -528,7 +526,7 @@ static const command_rec cmds[] = {
 
     AP_INIT_FLAG(
     "MRF_AllowParams",
-    CMD_FUNC ap_set_flag_slot,
+    (cmd_func) ap_set_flag_slot,
     (void *)APR_OFFSETOF(mrf_conf, allowparams),
     ACCESS_CONF,
     "If set, this configuration only responds to subrequests"
