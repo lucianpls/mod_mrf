@@ -441,7 +441,7 @@ static int handler(request_rec *r) {
         tile.z = apr_atoi64(*(char **)apr_array_pop(tokens));
 
     // Don't allow access to levels less than zero, send the empty tile instead
-    if (tile.l < 0)
+    if (tile.l < 0 || tile.x < 0 || tile.y < 0)
         return sendEmptyTile(r, raster.missing);
 
     tile.l += raster.skip;
