@@ -1,4 +1,5 @@
-C_SRC = mod_mrf.cpp
+TGT = mod_mrf
+C_SRC = $(TGT).cpp
 FILES = $(C_SRC)
 
 DEFINES = -DLINUX -D_REENTRANT -D_GNU_SOURCE $(DEBUG)
@@ -9,13 +10,13 @@ DEFINES = -DLINUX -D_REENTRANT -D_GNU_SOURCE $(DEBUG)
 # LIBTOOL, DEBUG ...
 
 include Makefile.lcl
-TARGET = .libs/mod_mrf.so
+TARGET = .libs/$(TGT).so
 
 # Can't use apxs to build c++ modules
 # The options used here might depend on how apache was built
 $(TARGET)       :       $(FILES)
-	$(LIBTOOL) --silent --mode=compile g++ -prefer-pic -O2 -Wall $(DEFINES) $(INCLUDES) -pthread -c -o mod_mrf.lo $(C_SRC) && touch mod_mrf.slo
-	$(LIBTOOL) --silent --mode=link g++ -o mod_mrf.la -rpath $(DEST) -module -avoid-version mod_mrf.lo
+	$(LIBTOOL) --silent --mode=compile g++ -prefer-pic -O2 -Wall $(DEFINES) $(INCLUDES) -pthread -c -o $(TGT).lo $(C_SRC) && touch $(TGT).slo
+	$(LIBTOOL) --silent --mode=link g++ -o $(TGT).la -rpath $(DEST) -module -avoid-version $(TGT).lo
 
 install : $(TARGET)
 	$(SUDO) cp $(TARGET) $(DEST)
