@@ -524,7 +524,8 @@ static const command_rec cmds[] = {
 };
 
 static void register_hooks(apr_pool_t *p) {
-    ap_hook_handler(handler, NULL, NULL, APR_HOOK_FIRST);
+    // Up in the stack, but leave APR_HOOK_FIRST available
+    ap_hook_handler(handler, NULL, NULL, APR_HOOK_FIRST + 1);
 }
 
 module AP_MODULE_DECLARE_DATA mrf_module = {
