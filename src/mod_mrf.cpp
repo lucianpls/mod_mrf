@@ -361,6 +361,7 @@ static int vfile_pread(request_rec *r, storage_manager &mgr,
 }
 
 // Indirect read of index, returns error message or null
+// MRF index file is network order
 static const char *read_index(request_rec *r, range_t *idx, apr_off_t offset) {
     auto  cfg = get_conf<mrf_conf>(r, &mrf_module);
     storage_manager dst(idx, sizeof(range_t));
@@ -376,9 +377,11 @@ static const char *read_index(request_rec *r, range_t *idx, apr_off_t offset) {
             16 * (1 + (boffset / 96)), &cfg->idx, "MRF_INDEX"))
             return "Bitmap read error";
 
+#if defined(be32toh)
         // Change to host endian
         for (int i = 0; i < 4; i++)
             line[i] = be32toh(line[i]);
+#endif
 
         // The relocated block number for the original index record
         uint64_t blockn = block_count(line, static_cast<int>(boffset % 96));
@@ -394,8 +397,11 @@ static const char *read_index(request_rec *r, range_t *idx, apr_off_t offset) {
     if (sizeof(range_t) != vfile_pread(r, dst, offset, &cfg->idx, "MRF_INDEX"))
         return "Read error";
 
+#if defined(be64toh)
     idx->offset = be64toh(idx->offset);
     idx->size = be64toh(idx->size);
+#endif
+
     return nullptr;
 }
 
