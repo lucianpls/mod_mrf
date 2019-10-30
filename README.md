@@ -79,6 +79,13 @@ AHTSE Control Directives for this module are:
  when the MRF files are changed at run-time, avoiding stale or even broken content.  MRF in-place
  modification do not require this flag because the old content is still available
 
+ ***MMapping prefix***
+ - Optional, controls the mapping of the M parameter to data source.  The only value currently 
+ implemented is _prefix_, which means that the M, as a decimal number will be added right in front of
+ the basename of the file, both the Index and Data. The range based data file split still applies, 
+ each part will be prefixed by the M value
+
+
 ***CannedIndex On***
  - Optional, flags the index file as a canned format index, see mrf_apps/can.cpp.  This is a dense 
  format index that can be much smaller.  Should be used only when needed, and not recommended when
