@@ -228,7 +228,7 @@ static const char *file_set(cmd_parms *cmd, void *dconf, const char *arg)
 
     // What parameters we need for M mapping ?
     if ((line = apr_table_get(kvp, "MMapping"))) {
-        if (apr_strnatcmp(line, "prefix")) {
+        if (!apr_strnatcmp(line, "prefix")) {
             // Direct mapping means M becomes the prefix for the file name, no folder
             c->mmapping = MAPM_PREFIX;
         }
@@ -516,9 +516,11 @@ static int handler(request_rec *r) {
     rset *level = raster.rsets + tile.l;
     REQ_ERR_IF(tile.x >= level->w || tile.y >= level->h);
 
+    // Force single z if that's how the MRF is set up, maybe file name mapping applies
+    apr_int64_t tz = (raster.size.z != 1) ? tile.z : 0;
     // Offset of the index entry for this tile
     apr_off_t tidx_offset = sizeof(range_t) * (level->tiles +
-        + level->w * (tile.z * level->h + tile.y) + tile.x);
+        + level->w * (tz * level->h + tile.y) + tile.x);
 
     range_t index;
     const char *idx_fname = apply_mmapping(r, &tile, cfg->idx.name);
