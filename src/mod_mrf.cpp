@@ -11,6 +11,7 @@
 #include <cmath>
 #include <http_log.h>
 #include <http_request.h>
+#include <string>
 
 using namespace std;
 NS_AHTSE_USE
@@ -29,15 +30,20 @@ NS_AHTSE_USE
 #define bsc __builtin_popcount
 #endif
 
-// The next two functions are from the mrf/mrf_apps/can program
+// The next few functions are from the mrf/mrf_apps/can program
+// Check a specific bit position in a canned index header line
+// The bit position is [0, 95] and the first 32bit value is skipped
 inline bool is_on(uint32_t *values, int bit) {
     return 0 != (values[1 + bit / 32] & (static_cast<uint32_t>(1) << bit % 32));
 }
 
+// Canned index file header size
+// 16 byte prefix + 96 bit records in 128 bit lines
 static inline uint64_t hsize(uint64_t in_size) {
     return 16 + 16 * ((96 * BSZ - 1 + in_size) / (96 * BSZ));
 }
 
+// Packed block count, for a bit position in a line
 inline uint32_t block_count(uint32_t *values, int bit) {
     if (!is_on(values, bit))
         return NPOS;
@@ -46,6 +52,12 @@ inline uint32_t block_count(uint32_t *values, int bit) {
         bsc(values[2]) * (bit / 64) +
         bsc(values[1 + (bit / 32)] & ((1ULL << (bit % 32)) - 1)));
 }
+
+// How do we map M param mapping to a file name?
+enum mappings{
+    MAPM_NONE = 0, 
+    MAPM_PREFIX // The M value prefixes the file name, both index and data
+};
 
 struct mrf_conf {
     // array of guard regexp, one of them has to match
@@ -69,6 +81,9 @@ struct mrf_conf {
 
     // If set, file handles are not held open
     int dynamic;
+
+    // How do we map M param mapping to a file name?
+    int mmapping;
 
     // the canned index header size, or 0 for normal index
     uint64_t can_hsize;
@@ -127,6 +142,17 @@ static const char *parse_sources(cmd_parms *cmd, const char *src,
 
 #define parse_redirects(cmd, src, arr) parse_sources(cmd, src, arr, true)
 
+//
+// This function sets the MRF specific parameters
+// The raster size is defined using the normal libahtse parameters
+// Unique directives:
+// IndexFile : May be local paths or indirect, if prefixed by ://
+// DataFile
+// Redirect : Old style redirects, only if DataFile is not present
+// RetryCount : // For indirect redirect range requests
+// EmptyTile :
+// Dynamic On : If the file handles are not to be hold
+//
 static const char *file_set(cmd_parms *cmd, void *dconf, const char *arg)
 {
     ap_assert(sizeof(apr_off_t) == 8);
@@ -200,6 +226,16 @@ static const char *file_set(cmd_parms *cmd, void *dconf, const char *arg)
     if ((line = apr_table_get(kvp, "CannedIndex")) && getBool(line))
         c->can_hsize = hsize((c->raster.size.z + c->raster.rsets[0].tiles) * 16);
 
+    // What parameters we need for M mapping ?
+    if ((line = apr_table_get(kvp, "MMapping"))) {
+        if (!apr_strnatcmp(line, "prefix")) {
+            // Direct mapping means M becomes the prefix for the file name, no folder
+            c->mmapping = MAPM_PREFIX;
+        }
+        else
+            return "Unknown value for MMapping";
+    }
+
     return NULL;
 }
 
@@ -223,65 +259,68 @@ static const vfile_t *pick_source(const apr_array_header_t *sources, range_t *in
 
 // An open file handle and the matching file name, to be used as a note
 struct file_note {
-    const vfile_t *fh;
+    const char *fname;
     apr_file_t *pfh;
 };
 
 //
 // Open or retrieve a connection cached file handle
+// This is a real file
 // Do no close the returned file handle, it will be removed when the connection drops
 //
 // Only one opened handle exists per connection/token pair
 // This may lead to less caching, but avoids having too many opened files
 //
-static apr_status_t openConnFile(request_rec *r, apr_file_t **ppfh, const vfile_t *fh,
+static apr_status_t openConnFile(request_rec *r, apr_file_t **ppfh, const char *fname,
     const char *token, apr_int32_t extra_open_flags = 0)
 {
     apr_table_t *conn_notes = r->connection->notes;
 
-    file_note *fn = (file_note *)apr_table_get(conn_notes, token);
-    if (fn && fn->fh == fh) { // Match, return the handle
-        *ppfh = fn->pfh;
+    file_note *fnote = (file_note *)apr_table_get(conn_notes, token);
+    if (fnote && !apr_strnatcmp(fnote->fname, fname)) { // Match, return the handle
+        *ppfh = fnote->pfh;
         return APR_SUCCESS;
     }
 
     // Use the connection pool, it will close the file when it gets dropped
     apr_pool_t *pool = r->connection->pool;
-    if (!fn) { // new connection file
-        fn = reinterpret_cast<file_note *>(apr_pcalloc(pool, sizeof(file_note)));
+    if (!fnote) { // new connection file
+        fnote = reinterpret_cast<file_note *>(apr_pcalloc(pool, sizeof(file_note)));
     }
     else { // Not the right file, clean it up
         apr_table_unset(conn_notes, token); // Does not remove the storage
-        apr_file_close(fn->pfh);
+        apr_file_close(fnote->pfh);
     }
 
-    apr_status_t stat = apr_file_open(ppfh, fh->name, open_flags || extra_open_flags, 0, pool);
+    apr_status_t stat = apr_file_open(ppfh, fname, open_flags || extra_open_flags, 0, pool);
     if (APR_SUCCESS != stat)
         return stat;
 
     // Update the note and hook it up before returning
-    fn->fh = fh;
-    fn->pfh = *ppfh;
-    apr_table_setn(conn_notes, token, (const char *)fn);
+    fnote->fname = apr_pstrdup(pool, fname);
+    fnote->pfh = *ppfh;
+    apr_table_setn(conn_notes, token, (const char *)fnote);
     return APR_SUCCESS;
 }
 
 // Like pread, except not really thread safe
+// Range reads are done if file starts with ://
+// Range offset is offset, size is mgr->size
 // The token is used for connection caching
+
 static int vfile_pread(request_rec *r, storage_manager &mgr,
-    apr_off_t offset, const vfile_t *fh, const char *token = "MRF_DATA")
+    apr_off_t offset, const char *fname, const char *token = "MRF_DATA")
 {
     auto  cfg = get_conf<mrf_conf>(r, &mrf_module);
-    const char *name = fh->name;
+    const char *name = fname;
 
     bool redirect = (strlen(name) > 3 && name[0] == ':' && name[1] == '/');
-
     if (redirect) {
         // Remote file, just use a range request
         // TODO: S3 authorized requests
 
         // Skip the ":/" used to mark a redirect
-        name = fh->name + 2;
+        name = fname + 2;
 
         ap_filter_rec_t *receive_filter = ap_get_output_filter_handle("Receive");
         if (!receive_filter) {
@@ -337,7 +376,7 @@ static int vfile_pread(request_rec *r, storage_manager &mgr,
     if (cfg->dynamic)
         stat = apr_file_open(&pfh, name, open_flags, 0, r->pool);
     else
-        stat = openConnFile(r, &pfh, fh, token, APR_FOPEN_BUFFERED);
+        stat = openConnFile(r, &pfh, fname, token, APR_FOPEN_BUFFERED);
 
     if (stat != APR_SUCCESS) {
         ap_log_rerror(APLOG_MARK, APLOG_ERR, 0, r,
@@ -360,9 +399,9 @@ static int vfile_pread(request_rec *r, storage_manager &mgr,
     return (mgr.size = static_cast<int>(sz));
 }
 
-// Indirect read of index, returns error message or null
+// read index, returns error message or null
 // MRF index file is network order
-static const char *read_index(request_rec *r, range_t *idx, apr_off_t offset) {
+static const char *read_index(request_rec *r, range_t *idx, apr_off_t offset, const char *fname) {
     auto  cfg = get_conf<mrf_conf>(r, &mrf_module);
     storage_manager dst(idx, sizeof(range_t));
 
@@ -374,7 +413,7 @@ static const char *read_index(request_rec *r, range_t *idx, apr_off_t offset) {
         uint32_t line[4];
         storage_manager lmgr(line, 16);
         if (16 != vfile_pread(r, lmgr, 
-            16 * (1 + (boffset / 96)), &cfg->idx, "MRF_INDEX"))
+            16 * (1 + (boffset / 96)), fname, "MRF_INDEX"))
             return "Bitmap read error";
 
 #if defined(be32toh)
@@ -394,7 +433,7 @@ static const char *read_index(request_rec *r, range_t *idx, apr_off_t offset) {
         offset = cfg->can_hsize + blockn * BSZ + offset % BSZ;
     }
 
-    if (sizeof(range_t) != vfile_pread(r, dst, offset, &cfg->idx, "MRF_INDEX"))
+    if (sizeof(range_t) != vfile_pread(r, dst, offset, fname, "MRF_INDEX"))
         return "Read error";
 
 #if defined(be64toh)
@@ -414,6 +453,27 @@ static const char *read_index(request_rec *r, range_t *idx, apr_off_t offset) {
 #define SERR_IF(X, msg) if (X) { \
     ap_log_rerror(APLOG_MARK, APLOG_ERR, 0, r, "%s", msg);\
     return HTTP_INTERNAL_SERVER_ERROR; \
+}
+
+// Change the file name depending on the configuration
+// Returns nullptr if something went wrong
+const char *apply_mmapping(request_rec *r, const sz *tile, const char *fname)
+{
+    auto cfg = get_conf<mrf_conf>(r, &mrf_module);
+    if (cfg->mmapping == MAPM_NONE || tile->z == 0)
+        return fname;
+
+    // Switch to C++
+    string ret_fname(fname);
+    switch (cfg->mmapping) {
+    case MAPM_PREFIX:
+        size_t bnamepos = ret_fname.find_last_of("/");
+        if (bnamepos == string::npos)
+            return NULL;
+        ret_fname.insert(bnamepos + 1, apr_ltoa(r->pool, static_cast<long>(tile->z)));
+        break;
+    }
+    return apr_pstrdup(r->pool, ret_fname.c_str());
 }
 
 static int handler(request_rec *r) {
@@ -443,7 +503,7 @@ static int handler(request_rec *r) {
 
     // We can ignore the error on this one, defaults to zero
     // The parameter before the level can't start with a digit for an extra-dimensional MRF
-    if (raster.size.z != 1 && tokens->nelts)
+    if (tokens->nelts && (raster.size.z != 1 || cfg->mmapping != MAPM_NONE))
         tile.z = apr_atoi64(*(char **)apr_array_pop(tokens));
 
     // Don't allow access to levels less than zero, send the empty tile instead
@@ -456,24 +516,23 @@ static int handler(request_rec *r) {
     rset *level = raster.rsets + tile.l;
     REQ_ERR_IF(tile.x >= level->w || tile.y >= level->h);
 
+    // Force single z if that's how the MRF is set up, maybe file name mapping applies
+    apr_int64_t tz = (raster.size.z != 1) ? tile.z : 0;
     // Offset of the index entry for this tile
     apr_off_t tidx_offset = sizeof(range_t) * (level->tiles +
-        + level->w * (tile.z * level->h + tile.y) + tile.x);
+        + level->w * (tz * level->h + tile.y) + tile.x);
 
     range_t index;
-    const char *message;
-    SERR_IF((message = read_index(r, &index, tidx_offset)),
-        message);
+    const char *idx_fname = apply_mmapping(r, &tile, cfg->idx.name);
+    const char *message = read_index(r, &index, tidx_offset, idx_fname);
+    SERR_IF(message, message);
 
     // MRF index record is in network order
     if (index.size < 4) // Need at least four bytes for signature check
         return sendEmptyTile(r, raster.missing);
 
-    if (MAX_TILE_SIZE < index.size) { // Tile is too large, log and send error code
-        ap_log_error(APLOG_MARK, APLOG_ERR, 0, r->server, "Tile too large in %s", 
-            cfg->idx.name);
-        return HTTP_INTERNAL_SERVER_ERROR;
-    }
+    SERR_IF(MAX_TILE_SIZE < index.size, apr_pstrcat(r->pool,
+        "Tile too large found in ", idx_fname, NULL));
 
     // Check for conditional ETag here, no need to get the data
     char ETag[16];
@@ -486,14 +545,14 @@ static int handler(request_rec *r) {
 
     // Now for the data part
     const vfile_t *src = pick_source(cfg->source, &index);
-    const char *name = (src && src->name) ? src->name : nullptr;
+    const char *name = (src && src->name) ? apply_mmapping(r, &tile, src->name) : nullptr;
     SERR_IF(!name, apr_psprintf(r->pool, "No data file configured for %s", r->uri));
 
     apr_size_t size = static_cast<apr_size_t>(index.size);
     storage_manager img(apr_palloc(r->pool, size), size);
 
     SERR_IF(!img.buffer, "Memory allocation error in mod_mrf");
-    SERR_IF(img.size != vfile_pread(r, img, index.offset, src),
+    SERR_IF(img.size != vfile_pread(r, img, index.offset, name),
         "Data read error");
 
     // Looks fine, set the outgoing etag and then the image
