@@ -1,5 +1,5 @@
 /*
-* An OnEarth module that serves tiles from an MRF
+* An AHTSE module that serves tiles from an MRF
 * Lucian Plesea
 * (C) 2016-2019
 */
@@ -311,7 +311,7 @@ static apr_status_t openConnFile(request_rec *r, apr_file_t **ppfh, const char *
 static int vfile_pread(request_rec *r, storage_manager &mgr,
     apr_off_t offset, const char *fname, const char *token = "MRF_DATA")
 {
-    auto  cfg = get_conf<mrf_conf>(r, &mrf_module);
+    auto cfg = get_conf<mrf_conf>(r, &mrf_module);
     const char *name = fname;
 
     bool redirect = (strlen(name) > 3 && name[0] == ':' && name[1] == '/');
@@ -372,9 +372,22 @@ static int vfile_pread(request_rec *r, storage_manager &mgr,
     apr_file_t *pfh;
     apr_status_t stat;
 
-    // Don't keep handles open
-    if (cfg->dynamic)
-        stat = apr_file_open(&pfh, name, open_flags, 0, r->pool);
+    int dynamic = 0;
+    // Keep handles open, except if dynamic is on and fname is the default
+    if (cfg->dynamic) {
+        if (!apr_strnatcmp(token, "MRF_DATA")) {
+            // Only single data file, unmodified can be dynamic
+            if (1 == cfg->source->nelts) {
+                dynamic = !apr_strnatcmp(fname, APR_ARRAY_IDX(cfg->source, 0, vfile_t).name);
+            }
+        }
+        else { // Only unmodified index name can be dynamic
+            dynamic = !apr_strnatcmp(fname, cfg->idx.name);
+        }
+    }
+
+    if (dynamic)
+        stat = apr_file_open(&pfh, fname, open_flags, 0, r->pool);
     else
         stat = openConnFile(r, &pfh, fname, token, APR_FOPEN_BUFFERED);
 
@@ -392,7 +405,7 @@ static int vfile_pread(request_rec *r, storage_manager &mgr,
         sz = 0;
     }
 
-    if (cfg->dynamic)
+    if (dynamic)
         apr_file_close(pfh);
     // Don't close non-dynamic mode handles, they are reused
 
