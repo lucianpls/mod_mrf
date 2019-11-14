@@ -539,10 +539,12 @@ static int handler(request_rec *r) {
     const char *idx_fname = apply_mmapping(r, &tile, cfg->idx.name);
     const char *message = read_index(r, &index, tidx_offset, idx_fname);
     if (message) {
-        if (apr_strnatcmp(idx_fname, cfg->idx.name))
-            SERR_IF(message, message)
-        else
+        if (apr_strnatcmp(idx_fname, cfg->idx.name)) {
+            SERR_IF(message, message);
+        }
+        else {
             REQ_ERR_IF(message);
+        }
     }
 
     // MRF index record is in network order
