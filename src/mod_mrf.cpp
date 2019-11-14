@@ -538,7 +538,12 @@ static int handler(request_rec *r) {
     range_t index;
     const char *idx_fname = apply_mmapping(r, &tile, cfg->idx.name);
     const char *message = read_index(r, &index, tidx_offset, idx_fname);
-    SERR_IF(message, message);
+    if (message) {
+        if (apr_strnatcmp(idx_fname, cfg->idx.name))
+            SERR_IF(message, message)
+        else
+            REQ_ERR_IF(message);
+    }
 
     // MRF index record is in network order
     if (index.size < 4) // Need at least four bytes for signature check
