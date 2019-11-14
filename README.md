@@ -17,10 +17,6 @@ Apache configuration directives:
  - Empty lines, lines that start with # are considered comments
  - Unknown directives are ignored
 
- **MRF_AllowParams On**
-
- If set, the MRF module allows get requests with parameters.  Default is Off
-
 AHTSE Control Directives for this module are:
 
 ***DataFile path start_offset size***
