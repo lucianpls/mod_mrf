@@ -1,7 +1,7 @@
 # mod_mrf [AHTSE](https://github.com/lucianpls/AHTSE)
 
-An apache module that serves tiles directly from a local MRF, 2D or 3D.
-With the MRF data on a local SSD, this module average request latency is .25ms (as measured by httpd), and reaches request rates above 20000 req/sec on a single core.
+An apache module that serves tiles directly from a local MRF, 2D or 3D.  
+With the MRF data on a local SSD, this module average tile request latency is .25ms (as measured by httpd), and reaches request rates above 20000 req/sec on a single core.
 
 Apache configuration directives:
 
