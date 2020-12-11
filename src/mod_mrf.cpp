@@ -102,13 +102,6 @@ static void *create_dir_config(apr_pool_t *p, char *dummy) {
     return c;
 }
 
-static const char *set_regexp(cmd_parms *cmd, 
-    mrf_conf *c, 
-    const char *pattern)
-{
-    return add_regexp_to_array(cmd->pool, &c->arr_rxp, pattern);
-}
-
 // Parse a comma separated list of sources, add the entries to the array
 // Source may include offset and size, white space separated
 static const char *parse_sources(cmd_parms *cmd, const char *src, 
@@ -579,20 +572,20 @@ static int handler(request_rec *r) {
 }
 
 static const command_rec cmds[] = {
+    AP_INIT_TAKE1(
+    "MRF_RegExp",
+    (cmd_func)set_regexp<mrf_conf>,
+    0, // Self-pass argument
+    ACCESS_CONF, // availability
+    "Regular expression that the URL has to match.  At least one is required."
+    ),
+
     AP_INIT_FLAG(
     "MRF_Indirect",
     (cmd_func) ap_set_flag_slot,
     (void *)APR_OFFSETOF(mrf_conf, indirect),
     ACCESS_CONF,
     "If set, this configuration only responds to subrequests"
-    ),
-
-    AP_INIT_TAKE1(
-    "MRF_RegExp",
-    (cmd_func) set_regexp,
-    0, // Self-pass argument
-    ACCESS_CONF, // availability
-    "Regular expression that the URL has to match.  At least one is required."
     ),
 
     AP_INIT_TAKE1(
