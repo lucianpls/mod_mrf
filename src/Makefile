@@ -9,7 +9,8 @@ DEFINES = -DLINUX -D_REENTRANT -D_GNU_SOURCE $(DEBUG)
 # INCLUDES, the gcc include commands for httpd, apr headers
 # LIBTOOL, DEBUG ...
 
-include Makefile.lcl
+MAKEOPT ?= Makefile.lcl
+include $(MAKEOPT)
 
 # Can't use apxs to build c++ modules
 # The options used here might depend on how apache was built
