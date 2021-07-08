@@ -15,6 +15,7 @@
 
 using namespace std;
 NS_AHTSE_USE
+NS_ICD_USE
 
 // Max count, should never happen
 #define NPOS 0xffffffff
@@ -33,7 +34,7 @@ NS_AHTSE_USE
 // The next few functions are from the mrf/mrf_apps/can program
 // Check a specific bit position in a canned index header line
 // The bit position is [0, 95] and the first 32bit value is skipped
-inline bool is_on(uint32_t *values, int bit) {
+static inline bool is_on(uint32_t *values, int bit) {
     return 0 != (values[1 + bit / 32] & (static_cast<uint32_t>(1) << bit % 32));
 }
 
@@ -44,7 +45,7 @@ static inline uint64_t hsize(uint64_t in_size) {
 }
 
 // Packed block count, for a bit position in a line
-inline uint32_t block_count(uint32_t *values, int bit) {
+static inline uint32_t block_count(uint32_t *values, int bit) {
     if (!is_on(values, bit))
         return NPOS;
     return (values[0] +
@@ -324,8 +325,8 @@ static int vfile_pread(request_rec *r, storage_manager &mgr,
 
         // Get a buffer for the received image
         receive_ctx rctx;
-        rctx.buffer = mgr.buffer;
-        rctx.maxsize = mgr.size;
+        rctx.buffer = static_cast<char *>(mgr.buffer);
+        rctx.maxsize = static_cast<int>(mgr.size);
         rctx.size = 0;
 
         // Data file is on a remote site a range request redirect with a range header
@@ -348,7 +349,7 @@ static int vfile_pread(request_rec *r, storage_manager &mgr,
 
             if ((status != APR_SUCCESS
                     || sr->status != HTTP_PARTIAL_CONTENT
-                    || rctx.size != mgr.size)
+                    || static_cast<size_t>(rctx.size) != mgr.size)
                         && (0 == tries--))
             {
                 ap_log_rerror(APLOG_MARK, APLOG_ERR, 0, r,
@@ -356,7 +357,7 @@ static int vfile_pread(request_rec *r, storage_manager &mgr,
                     name, apr_time_now() - now);
                 failed = true;
             }
-        } while (!failed && rctx.size != mgr.size);
+        } while (!failed && static_cast<size_t>(rctx.size) != mgr.size);
 
         return rctx.size;
     } // Redirect read
@@ -402,7 +403,8 @@ static int vfile_pread(request_rec *r, storage_manager &mgr,
         apr_file_close(pfh);
     // Don't close non-dynamic mode handles, they are reused
 
-    return (mgr.size = static_cast<int>(sz));
+    mgr.size = sz;
+    return static_cast<int>(sz);
 }
 
 // read index, returns error message or null
@@ -463,7 +465,7 @@ static const char *read_index(request_rec *r, range_t *idx, apr_off_t offset, co
 
 // Change the file name depending on the configuration
 // Returns nullptr if something went wrong
-const char *apply_mmapping(request_rec *r, const sz *tile, const char *fname)
+const char *apply_mmapping(request_rec *r, const sz5* tile, const char *fname)
 {
     auto cfg = get_conf<mrf_conf>(r, &mrf_module);
     if (cfg->mmapping == MAPM_NONE || tile->z == 0)
@@ -497,7 +499,7 @@ static int handler(request_rec *r) {
 
     // Use a xyzc structure, with c being the level
     // Input order is M/Level/Row/Column, with M being optional
-    sz tile;
+    sz5 tile;
     memset(&tile, 0, sizeof(tile));
 
     // Need at least three numerical arguments
@@ -518,9 +520,9 @@ static int handler(request_rec *r) {
 
     tile.l += raster.skip;
     // Check for bad requests, outside of the defined bounds
-    REQ_ERR_IF(tile.l >= raster.n_levels);
+    REQ_ERR_IF(tile.l >= static_cast<size_t>(raster.n_levels));
     rset *level = raster.rsets + tile.l;
-    REQ_ERR_IF(tile.x >= level->w || tile.y >= level->h);
+    REQ_ERR_IF(tile.x >= static_cast<size_t>(level->w) || tile.y >= static_cast<size_t>(level->h));
 
     // Force single z if that's how the MRF is set up, maybe file name mapping applies
     apr_int64_t tz = (raster.size.z != 1) ? tile.z : 0;
@@ -563,7 +565,7 @@ static int handler(request_rec *r) {
     storage_manager img(apr_palloc(r->pool, size), size);
 
     SERR_IF(!img.buffer, "Memory allocation error in mod_mrf");
-    SERR_IF(img.size != vfile_pread(r, img, index.offset, name),
+    SERR_IF(img.size != static_cast<size_t>(vfile_pread(r, img, index.offset, name)),
         "Data read error");
 
     // Looks fine, set the outgoing etag and then the image

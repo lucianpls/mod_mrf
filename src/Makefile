@@ -18,7 +18,7 @@ include $(MAKEOPT)
 default	:	$(TARGET)
 
 $(TARGET)       :       $(C_SRC)
-	$(LIBTOOL) --silent --mode=compile g++ -prefer-pic -O2 -Wall $(DEFINES) $(EXTRA_INCLUDES) -pthread -c -o $(MODULE).lo $< && touch $(MODULE).slo
+	$(LIBTOOL) --silent --mode=compile g++ -prefer-pic -O2 -Wall $(DEFINES) $(EXTRA_INCLUDES) -I $(EXP_INCLUDEDIR) -pthread -c -o $(MODULE).lo $< && touch $(MODULE).slo
 	$(LIBTOOL) --silent --mode=link g++ -o $(MODULE).la -rpath $(LIBEXECDIR) -module -avoid-version $(MODULE).lo
 
 install : $(TARGET)
