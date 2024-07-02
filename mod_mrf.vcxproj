@@ -107,6 +107,7 @@
       <EnableCOMDATFolding>true</EnableCOMDATFolding>
       <OptimizeReferences>true</OptimizeReferences>
       <AdditionalDependencies>libahtse.lib;libhttpd.lib;libapr-2.lib;$(CoreLibraryDependencies);%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalOptions>/EXPORT:mrf_module,@1</AdditionalOptions>
     </Link>
     <PostBuildEvent>
       <Command>copy /y $(TargetPath) $(prefix)\modules</Command>

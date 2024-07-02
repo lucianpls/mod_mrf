@@ -9,9 +9,10 @@
 
 #include <algorithm>
 #include <cmath>
+#include <string>
+
 #include <http_log.h>
 #include <http_request.h>
-#include <string>
 
 using namespace std;
 NS_AHTSE_USE
@@ -595,7 +596,7 @@ static const command_rec cmds[] = {
     (cmd_func) file_set, // Callback
     0, // Self-pass argument
     ACCESS_CONF, // availability
-    "The configuration file for this module"
+    "The AHTSE configuration file for this module"
     ),
 
     { NULL }
