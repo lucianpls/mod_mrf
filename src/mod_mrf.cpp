@@ -98,8 +98,7 @@ APLOG_USE_MODULE(mrf);
 #endif
 
 static void *create_dir_config(apr_pool_t *p, char *dummy) {
-    mrf_conf *c = reinterpret_cast<mrf_conf *>(
-        apr_pcalloc(p, sizeof(mrf_conf)));
+    auto c = static_cast<mrf_conf *>(pcreate<mrf_conf>(p, dummy));
     c->retries = 5;
     return c;
 }
